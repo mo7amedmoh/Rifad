@@ -180,10 +180,10 @@ function PageHeading({ eyebrow, title, description, action }) {
 function Dashboard({ period, setPeriod, notify }) {
   const [summary, setSummary] = useState(null);
   const [busy, setBusy] = useState(true);
-  const [ticketView, setTicketView] = useState({ status: 'open', period: null });
+  const [ticketView, setTicketView] = useState({ status: 'open', period });
   const reportRef = useRef(null);
   useEffect(() => {
-    setTicketView((current) => current.period ? { ...current, period } : current);
+    setTicketView((current) => ({ ...current, period }));
   }, [period]);
   useEffect(() => {
     let active = true;

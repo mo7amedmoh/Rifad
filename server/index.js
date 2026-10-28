@@ -153,7 +153,10 @@ function isClosed(ticket) {
   return /مغلق|تم حل|محلول|closed|resolved/i.test(ticket.status);
 }
 function isCancelled(ticket) {
-  return /^(ملغى|ملغي|cancelled)$/i.test(ticket.status.trim());
+  return /ملغى|ملغي|cancelled|canceled/i.test(ticket.status.trim());
+}
+function isOpen(ticket) {
+  return !isClosed(ticket) && !isCancelled(ticket);
 }
 app.use('/api', (req, res, next) => {
   const origin = req.get('origin');
@@ -277,13 +280,13 @@ app.get('/api/summary', requireRole(...roles), (req, res) => {
   const dateFilter = dateCutoff ? ' AND t.created_at >= ?' : '';
   const tickets = db.prepare(`SELECT t.*, s.name AS school_name, s.supervisor, s.region FROM tickets t JOIN schools s ON s.school_number = t.matched_school_number WHERE t.deleted_at IS NULL${dateFilter} ORDER BY t.created_at DESC`).all(...(dateCutoff ? [dateCutoff] : []));
   const activeTickets = tickets
-    .filter((ticket) => !isClosed(ticket) && !isCancelled(ticket))
+    .filter(isOpen)
     .map((ticket) => ({ ...ticket, sla_remaining_minutes: slaRemainingMinutes(ticket, slaSettings) }));
   const alertSource = period === 'all' ? tickets : db.prepare(`SELECT t.*, s.name AS school_name, s.supervisor, s.region
     FROM tickets t JOIN schools s ON s.school_number = t.matched_school_number
     WHERE t.deleted_at IS NULL`).all();
   const allOpenTickets = alertSource
-    .filter((ticket) => !isClosed(ticket) && !isCancelled(ticket))
+    .filter(isOpen)
     .map((ticket) => ({ ...ticket, sla_remaining_minutes: slaRemainingMinutes(ticket, slaSettings) }));
   const approachingSla = allOpenTickets
     .filter((ticket) => ticket.sla_remaining_minutes > 0 && ticket.sla_remaining_minutes <= 120)
@@ -301,7 +304,7 @@ app.get('/api/summary', requireRole(...roles), (req, res) => {
       const item = result.get(name) || { name, total: 0, breached: 0, open: 0 };
       item.total += 1;
       if (isBreached(ticket)) item.breached += 1;
-      if (!isClosed(ticket) && !isCancelled(ticket)) item.open += 1;
+      if (isOpen(ticket)) item.open += 1;
       result.set(name, item);
     }
     return [...result.values()].sort((a, b) => b.total - a.total).slice(0, 8);
@@ -462,7 +465,6 @@ app.get('/api/open-tickets', requireRole(...roles), (req, res) => {
   const layer = String(req.query.layer || '').trim().slice(0, 180);
   const region = String(req.query.region || '').trim().slice(0, 150);
   const limit = Math.max(1, Math.min(2000, Number(req.query.limit) || 2000));
-  const terminalStatuses = ['مغلق', 'تم حل', 'محلول', 'ملغى', 'ملغي', 'cancelled', 'closed', 'resolved'];
   const tickets = db.prepare(`SELECT t.*, s.name AS school_name, s.supervisor, s.region
     FROM tickets t JOIN schools s ON s.school_number = t.matched_school_number
     WHERE t.deleted_at IS NULL ORDER BY t.created_at DESC`).all();
@@ -477,7 +479,7 @@ app.get('/api/open-tickets', requireRole(...roles), (req, res) => {
   });
   const openTickets = filteredPeriod.filter((ticket) => statusFilter === 'breached'
     ? isBreached(ticket)
-    : !terminalStatuses.some((terminal) => ticket.status.trim().toLocaleLowerCase().includes(terminal.toLocaleLowerCase())));
+    : isOpen(ticket));
   const supervisors = [...new Set(openTickets.map((ticket) => ticket.supervisor || 'غير محدد'))].sort((a, b) => a.localeCompare(b, 'ar'));
   const layers = [...new Set(openTickets.map((ticket) => ticket.layer3 || 'غير محدد'))].sort((a, b) => a.localeCompare(b, 'ar'));
   const regions = [...new Set(openTickets.map((ticket) => ticket.region || 'غير محدد'))].sort((a, b) => a.localeCompare(b, 'ar'));
@@ -676,7 +678,7 @@ app.get('/api/schools/:schoolNumber/report', requireRole(...roles), (req, res) =
   const tickets = db.prepare(`SELECT * FROM tickets
     WHERE matched_school_number = ? AND deleted_at IS NULL
     ORDER BY created_at DESC`).all(schoolNumber);
-  const activeTickets = tickets.filter((ticket) => !isClosed(ticket) && !isCancelled(ticket));
+  const activeTickets = tickets.filter(isOpen);
   const eligible = tickets.filter((ticket) => !isCancelled(ticket));
   const closed = eligible.filter(isClosed);
   const breached = eligible.filter(isBreached);
@@ -685,7 +687,7 @@ app.get('/api/schools/:schoolNumber/report', requireRole(...roles), (req, res) =
     const name = ticket.layer3 || 'غير محدد';
     const item = layerCounts.get(name) || { name, total: 0, open: 0, closed: 0, breached: 0 };
     item.total += 1;
-    if (!isClosed(ticket) && !isCancelled(ticket)) item.open += 1;
+    if (isOpen(ticket)) item.open += 1;
     if (isClosed(ticket)) item.closed += 1;
     if (isBreached(ticket)) item.breached += 1;
     layerCounts.set(name, item);

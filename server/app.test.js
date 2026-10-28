@@ -184,6 +184,19 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
   });
   assert.equal(closedImportResponse.status, 200);
 
+  const monthlySummaryResponse = await fetch(`${base}/api/summary?period=month`, { headers: { Cookie: cookie } });
+  const monthlySummary = await monthlySummaryResponse.json();
+  const monthlyOpenResponse = await fetch(`${base}/api/open-tickets?status=open&period=month`, { headers: { Cookie: cookie } });
+  assert.equal((await monthlyOpenResponse.json()).total, monthlySummary.metrics.open);
+
+  db.prepare('UPDATE tickets SET status = ? WHERE case_id = ?').run('ملغى يدويًا', 'CASE-MEDIUM-1');
+  const cancelledSummaryResponse = await fetch(`${base}/api/summary?period=month`, { headers: { Cookie: cookie } });
+  const cancelledSummary = await cancelledSummaryResponse.json();
+  const cancelledOpenResponse = await fetch(`${base}/api/open-tickets?status=open&period=month`, { headers: { Cookie: cookie } });
+  assert.equal((await cancelledOpenResponse.json()).total, cancelledSummary.metrics.open);
+  assert.equal(cancelledSummary.metrics.open, 2);
+  db.prepare('UPDATE tickets SET status = ? WHERE case_id = ?').run('قيد التنفيذ', 'CASE-MEDIUM-1');
+
   const summaryResponse = await fetch(`${base}/api/summary?period=all`, { headers: { Cookie: cookie } });
   const summary = await summaryResponse.json();
   assert.equal(summary.metrics.total, 4);
