@@ -56,6 +56,8 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
   assert.equal(initialSettings.criticalHours, 24);
   assert.equal(initialSettings.mediumHours, 72);
   assert.equal(initialSettings.priorityMatrixEnabled, false);
+  assert.equal(initialSettings.priorityOverAlertEnabled, true);
+  assert.equal(initialSettings.priorityUnderAlertEnabled, false);
 
   const createdAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   const csv = [
@@ -135,7 +137,25 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
   const priorityAlert = priorityAlerts.priorityAlerts.find((item) => item.case_id === 'CASE-MEDIUM-1');
   assert.equal(priorityAlert.expectedPriority, 'P4');
   assert.equal(priorityAlert.currentPriority, 'حرج');
+  assert.equal(priorityAlert.alertDirection, 'over');
   assert.match(priorityAlert.reason, /صيانة خدمية بسيطة/);
+  db.prepare('UPDATE tickets SET description = ?, priority = ? WHERE case_id = ?')
+    .run('التماس كهربائي في غرفة الكهرباء', 'متوسط', 'CASE-MEDIUM-1');
+  const underPriorityDisabledSummary = await fetch(`${base}/api/summary?period=all`, { headers: { Cookie: cookie } });
+  assert.equal((await underPriorityDisabledSummary.json()).priorityAlertCount, 0);
+  const enableUnderPriorityAlerts = await fetch(`${base}/api/settings`, {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'X-CSRF-Token': authData.csrfToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ priorityUnderAlertEnabled: true })
+  });
+  assert.equal(enableUnderPriorityAlerts.status, 200);
+  const underPriorityEnabledSummary = await fetch(`${base}/api/summary?period=all`, { headers: { Cookie: cookie } });
+  const underPriorityAlert = (await underPriorityEnabledSummary.json()).priorityAlerts.find((item) => item.case_id === 'CASE-MEDIUM-1');
+  assert.equal(underPriorityAlert.expectedPriority, 'P1');
+  assert.equal(underPriorityAlert.alertDirection, 'under');
+  const updatedPrioritySettingsResponse = await fetch(`${base}/api/settings`, { headers: { Cookie: cookie } });
+  const updatedPrioritySettings = await updatedPrioritySettingsResponse.json();
+  assert.equal(updatedPrioritySettings.priorityUnderAlertEnabled, true);
   const disablePriorityMatrix = await fetch(`${base}/api/settings`, {
     method: 'PUT',
     headers: { Cookie: cookie, 'X-CSRF-Token': authData.csrfToken, 'Content-Type': 'application/json' },

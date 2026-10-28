@@ -59,23 +59,27 @@ function getPriorityGroup(value) {
   return null;
 }
 
-function isPriorityMismatch(currentPriority, expectedPriority) {
+function getPriorityDirection(currentPriority, expectedPriority) {
   const current = getPriorityGroup(currentPriority);
-  if (!current || !expectedPriority) return false;
-  if (currentPriority.match(/\bp[1-4]\b/i)) return current !== expectedPriority;
-  return current !== expectedPriority;
+  if (!current || !expectedPriority || current === expectedPriority) return null;
+  const currentRank = Number(current[1]);
+  const expectedRank = Number(expectedPriority[1]);
+  return currentRank < expectedRank ? 'over' : 'under';
 }
 
-function getPriorityAssessment(ticket) {
+function getPriorityAssessment(ticket, { priorityOverAlertEnabled = true, priorityUnderAlertEnabled = false } = {}) {
   const expected = inferExpectedPriority(ticket);
-  if (!expected || !isPriorityMismatch(ticket.priority, expected.priority)) return null;
+  const direction = expected && getPriorityDirection(ticket.priority, expected.priority);
+  if (!direction || (direction === 'over' && !priorityOverAlertEnabled) || (direction === 'under' && !priorityUnderAlertEnabled)) return null;
   return {
     expectedPriority: expected.priority,
     expectedLabel: expected.label,
     resolutionHours: expected.resolutionHours,
     currentPriority: ticket.priority,
+    alertDirection: direction,
+    alertLabel: direction === 'over' ? 'أولوية أعلى من الموصى بها' : 'أولوية أقل من الموصى بها',
     reason: expected.reason
   };
 }
 
-module.exports = { PRIORITIES, inferExpectedPriority, getPriorityGroup, isPriorityMismatch, getPriorityAssessment };
+module.exports = { PRIORITIES, inferExpectedPriority, getPriorityGroup, getPriorityDirection, getPriorityAssessment };

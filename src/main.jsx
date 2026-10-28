@@ -239,7 +239,7 @@ function SlaAlerts({ items, count }) {
 function PriorityAlerts({ items, count }) {
   return <section className={`panel sla-alert-panel ${count ? 'has-sla-alerts' : ''}`}>
     <div className="panel-heading"><div><h2><AlertCircle size={17} />تنبيهات تدقيق الأولوية</h2><p>توصيات آلية وفق مصفوفة P1–P4 · لا تغيّر أولوية البلاغ تلقائيًا</p></div><span className={`tag ${count ? 'tag-soft-amber' : 'tag-soft-green'}`}>{fmt.format(count)} تنبيه</span></div>
-    {items.length ? <div className="sla-alert-list">{items.map((ticket) => <div className="sla-alert-row" key={ticket.id}><span className="sla-alert-icon"><AlertTriangle size={16} /></span><div><strong>{ticket.school_name || ticket.building_name || 'مدرسة غير محددة'}</strong><small>{ticket.case_id} · الأولوية الحالية: {ticket.currentPriority || 'غير محددة'} · المقترحة: {ticket.expectedPriority} — {ticket.expectedLabel}</small><small>{ticket.reason} · مدة المعالجة المستهدفة في المصفوفة: {fmt.format(ticket.resolutionHours)} ساعة</small></div></div>)}</div> : <div className="sla-alert-empty"><CheckCircle2 size={17} />لا توجد توصيات لتصحيح الأولوية ضمن الفترة المحددة.</div>}
+    {items.length ? <div className="sla-alert-list">{items.map((ticket) => <div className="sla-alert-row" key={ticket.id}><span className="sla-alert-icon"><AlertTriangle size={16} /></span><div><strong>{ticket.school_name || ticket.building_name || 'مدرسة غير محددة'}</strong><small>{ticket.case_id} · {ticket.alertLabel} · الحالية: {ticket.currentPriority || 'غير محددة'} · المقترحة: {ticket.expectedPriority} — {ticket.expectedLabel}</small><small>{ticket.reason} · زمن المعالجة المقترح في المصفوفة: {fmt.format(ticket.resolutionHours)} ساعة</small></div></div>)}</div> : <div className="sla-alert-empty"><CheckCircle2 size={17} />لا توجد توصيات لتصحيح الأولوية ضمن الفترة المحددة.</div>}
   </section>;
 }
 function OpenTicketsSection({ notify, period, view }) {
@@ -1084,12 +1084,22 @@ function UsersPage({ csrf, session, notify }) {
   </>;
 }
 function SettingsPage({ csrf, notify }) {
-  const [settings, setSettings] = useState({ schoolsUrl: '', criticalHours: 24, mediumHours: 72, priorityMatrixEnabled: false, importRuns: [] });
+  const [settings, setSettings] = useState({
+    schoolsUrl: '', criticalHours: 24, mediumHours: 72,
+    priorityMatrixEnabled: false, priorityOverAlertEnabled: true, priorityUnderAlertEnabled: false, importRuns: []
+  });
   const [busy, setBusy] = useState(false);
   useEffect(() => { request('/api/settings').then(setSettings).catch((e) => notify(e.message)); }, [notify]);
   const save = async (event) => {
     event.preventDefault(); setBusy(true);
-    try { await request('/api/settings', { method: 'PUT', csrf, body: JSON.stringify({ schoolsUrl: settings.schoolsUrl, criticalHours: Number(settings.criticalHours), mediumHours: Number(settings.mediumHours), priorityMatrixEnabled: settings.priorityMatrixEnabled }) }); notify('تم حفظ الإعدادات.'); }
+    try { await request('/api/settings', { method: 'PUT', csrf, body: JSON.stringify({
+      schoolsUrl: settings.schoolsUrl,
+      criticalHours: Number(settings.criticalHours),
+      mediumHours: Number(settings.mediumHours),
+      priorityMatrixEnabled: settings.priorityMatrixEnabled,
+      priorityOverAlertEnabled: settings.priorityOverAlertEnabled,
+      priorityUnderAlertEnabled: settings.priorityUnderAlertEnabled
+    }) }); notify('تم حفظ الإعدادات.'); }
     catch (error) { notify(error.message); }
     finally { setBusy(false); }
   };
@@ -1098,14 +1108,24 @@ function SettingsPage({ csrf, notify }) {
       <div className="settings-title"><span className="settings-icon"><FileSpreadsheet size={19} /></span><div><h2>مصدر قاعدة بيانات المدارس</h2><p>رابط CSV منشور من Google Sheets أو Microsoft 365 بصلاحية عرض.</p></div></div>
       <label className="setting-label">رابط الشيت<input type="url" dir="ltr" value={settings.schoolsUrl} onChange={(e) => setSettings({ ...settings, schoolsUrl: e.target.value })} placeholder="https://docs.google.com/spreadsheets/d/…" /></label>
       <div className="form-hint"><LockKeyhole size={14} />يقبل النظام روابط HTTPS من نطاقات Google Sheets وMicrosoft 365 فقط.</div>
+      <div className="settings-title priority-matrix-heading"><span className="settings-icon"><AlertCircle size={19} /></span><div><h2>الأولويات الجديدة حسب المصفوفة</h2><p>تفعيل تصنيف P1–P4 يضيف مراجعة الأولوية المقترحة للبلاغات المفتوحة فقط. مدد المعالجة أدناه إرشادية ولا تغيّر إعدادات SLA الحالية.</p></div></div>
+      <div className="priority-tiers" aria-label="مستويات الأولوية الجديدة">
+        <div className="priority-tier"><strong>P1 · حرج جدًا</strong><span>خطر مباشر أو توقف كامل · استجابة ساعة ومعالجة ساعتان</span></div>
+        <div className="priority-tier"><strong>P2 · حرج</strong><span>تعطل جزئي أو أنظمة الطوارئ · استجابة 24 ساعة ومعالجة 4 ساعات</span></div>
+        <div className="priority-tier"><strong>P3 · متوسط عاجل</strong><span>يؤثر على البيئة التعليمية دون خطر مباشر · 24 ساعة</span></div>
+        <div className="priority-tier"><strong>P4 · روتيني</strong><span>صيانة بسيطة غير متعلقة بالسلامة · استجابة 24 ساعة ومعالجة 48 ساعة</span></div>
+      </div>
+      <label className="priority-matrix-toggle"><input type="checkbox" checked={settings.priorityMatrixEnabled} onChange={(event) => setSettings({ ...settings, priorityMatrixEnabled: event.target.checked })} /><span><strong>تفعيل مصفوفة الأولويات الجديدة</strong><small>عند إيقافها لا تظهر تنبيهات التصنيف ولا تتغير البيانات المستوردة.</small></span></label>
+      <div className={`priority-alert-options ${settings.priorityMatrixEnabled ? '' : 'priority-alert-options-disabled'}`}>
+        <label className="priority-matrix-toggle"><input type="checkbox" checked={settings.priorityOverAlertEnabled} disabled={!settings.priorityMatrixEnabled} onChange={(event) => setSettings({ ...settings, priorityOverAlertEnabled: event.target.checked })} /><span><strong>التنبيه عند المبالغة في الأولوية</strong><small>مثال: البلاغ مصنف «حرج» بينما توصية المصفوفة «متوسط» — مفعّل افتراضيًا.</small></span></label>
+        <label className="priority-matrix-toggle"><input type="checkbox" checked={settings.priorityUnderAlertEnabled} disabled={!settings.priorityMatrixEnabled} onChange={(event) => setSettings({ ...settings, priorityUnderAlertEnabled: event.target.checked })} /><span><strong>التنبيه عند التقليل من الأولوية</strong><small>مثال: البلاغ مصنف «متوسط» بينما توصية المصفوفة «حرج» — معطّل افتراضيًا.</small></span></label>
+      </div>
       <div className="settings-title sla-settings-title"><span className="settings-icon"><Clock3 size={19} /></span><div><h2>مدد SLA حسب الأولوية</h2><p>تُحسب المهلة المتبقية من تاريخ إنشاء البلاغ، وتُطبق القيم على البلاغات الحالية والجديدة.</p></div></div>
       <div className="sla-settings-grid">
         <label className="setting-label">مهلة البلاغ الحرج (ساعة)<input type="number" min="1" max="720" step="1" required value={settings.criticalHours} onChange={(e) => setSettings({ ...settings, criticalHours: e.target.value })} /></label>
         <label className="setting-label">مهلة البلاغ المتوسط (ساعة)<input type="number" min="1" max="720" step="1" required value={settings.mediumHours} onChange={(e) => setSettings({ ...settings, mediumHours: e.target.value })} /></label>
       </div>
       <div className="form-hint"><Clock3 size={14} />القيم الافتراضية: الحرج 24 ساعة، والمتوسط 72 ساعة. النطاق المسموح من 1 إلى 720 ساعة.</div>
-      <div className="settings-title sla-settings-title"><span className="settings-icon"><AlertCircle size={19} /></span><div><h2>تدقيق الأولوية وفق المصفوفة</h2><p>فحص اختياري لمقارنة وصف البلاغ وطبقاته مع معايير P1–P4.</p></div></div>
-      <label className="priority-matrix-toggle"><input type="checkbox" checked={settings.priorityMatrixEnabled} onChange={(event) => setSettings({ ...settings, priorityMatrixEnabled: event.target.checked })} /><span><strong>تفعيل تنبيهات الأولوية المقترحة</strong><small>عند التفعيل تظهر التنبيهات أسفل تنبيهات SLA. لا تُعدّل الأولوية المسجلة ولا تغيّر مدد SLA الحالية.</small></span></label>
       <button className="btn btn-primary" disabled={busy}>{busy ? 'جارٍ الحفظ…' : 'حفظ الإعدادات'}</button>
     </form>
     <section className="panel import-history"><div className="panel-heading"><div><h2>سجل الاستيراد</h2><p>آخر عمليات تحديث البلاغات في قاعدة البيانات</p></div><span className="tag tag-soft-blue"><Clock3 size={14} />آخر 8 عمليات</span></div>{settings.importRuns?.length ? settings.importRuns.map((run, i) => <div className="history-row" key={`${run.filename}-${i}`}><span className="history-file"><FileSpreadsheet size={16} /></span><div><strong>{run.filename}</strong><small>{new Date(`${run.imported_at}Z`).toLocaleString('ar-SA')}</small></div><span className="history-number">{fmt.format(run.total_rows)} سجل</span><span className="history-detail">+{fmt.format(run.inserted_rows)} جديد · {fmt.format(run.updated_rows)} محدّث</span></div>) : <EmptyState text="لم يتم استيراد ملفات بعد." />}</section>

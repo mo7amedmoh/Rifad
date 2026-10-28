@@ -50,6 +50,8 @@ db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('schools_url
 db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('sla_critical_hours', '24')").run();
 db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('sla_medium_hours', '72')").run();
 db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('priority_matrix_enabled', 'false')").run();
+db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('priority_over_alert_enabled', 'true')").run();
+db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('priority_under_alert_enabled', 'false')").run();
 
 function publicUser(user) {
   return user && { id: user.id, username: user.username, displayName: user.display_name, role: user.role, roleName: roleNames[user.role] };
@@ -131,6 +133,14 @@ function getSlaSettings() {
 }
 function isPriorityMatrixEnabled() {
   return db.prepare("SELECT value FROM app_settings WHERE key = 'priority_matrix_enabled'").get()?.value === 'true';
+}
+function getPriorityAlertSettings() {
+  const settings = db.prepare("SELECT key, value FROM app_settings WHERE key IN ('priority_over_alert_enabled', 'priority_under_alert_enabled')").all();
+  const values = Object.fromEntries(settings.map(({ key, value }) => [key, value === 'true']));
+  return {
+    priorityOverAlertEnabled: values.priority_over_alert_enabled ?? true,
+    priorityUnderAlertEnabled: values.priority_under_alert_enabled ?? false
+  };
 }
 function asyncRoute(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
@@ -287,9 +297,10 @@ app.get('/api/summary', requireRole(...roles), (req, res) => {
   const activeTickets = tickets
     .filter(isOpen)
     .map((ticket) => ({ ...ticket, sla_remaining_minutes: slaRemainingMinutes(ticket, slaSettings) }));
+  const priorityAlertSettings = getPriorityAlertSettings();
   const priorityAlerts = isPriorityMatrixEnabled()
     ? activeTickets.flatMap((ticket) => {
-      const assessment = getPriorityAssessment(ticket);
+      const assessment = getPriorityAssessment(ticket, priorityAlertSettings);
       return assessment ? [{ ...cleanTicket(ticket), ...assessment }] : [];
     }).slice(0, 20)
     : [];
@@ -981,6 +992,7 @@ app.get('/api/settings', requireRole('admin'), (req, res) => {
     schoolsUrl: db.prepare("SELECT value FROM app_settings WHERE key = 'schools_url'").get()?.value || '',
     ...getSlaSettings(),
     priorityMatrixEnabled: isPriorityMatrixEnabled(),
+    ...getPriorityAlertSettings(),
     importRuns: db.prepare('SELECT filename, total_rows, inserted_rows, updated_rows, imported_at FROM import_runs ORDER BY id DESC LIMIT 8').all()
   });
 });
@@ -989,8 +1001,11 @@ app.put('/api/settings', requireRole('admin'), (req, res) => {
     schoolsUrl: z.string().trim().max(2000).url().or(z.literal('')).optional(),
     criticalHours: z.number().int().min(1).max(720).optional(),
     mediumHours: z.number().int().min(1).max(720).optional(),
-    priorityMatrixEnabled: z.boolean().optional()
-  }).refine((value) => value.schoolsUrl !== undefined || value.criticalHours !== undefined || value.mediumHours !== undefined || value.priorityMatrixEnabled !== undefined).safeParse(req.body);
+    priorityMatrixEnabled: z.boolean().optional(),
+    priorityOverAlertEnabled: z.boolean().optional(),
+    priorityUnderAlertEnabled: z.boolean().optional()
+  }).refine((value) => value.schoolsUrl !== undefined || value.criticalHours !== undefined || value.mediumHours !== undefined ||
+    value.priorityMatrixEnabled !== undefined || value.priorityOverAlertEnabled !== undefined || value.priorityUnderAlertEnabled !== undefined).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'تحقق من رابط الشيت ومدد SLA (من ساعة إلى 720 ساعة).' });
   if (parsed.data.schoolsUrl) {
     try {
@@ -1013,6 +1028,15 @@ app.put('/api/settings', requireRole('admin'), (req, res) => {
     db.prepare('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
       .run('priority_matrix_enabled', enabled);
     audit(req.user.id, 'update', 'settings', 'priority_matrix_enabled');
+  }
+  for (const [field, key] of [
+    ['priorityOverAlertEnabled', 'priority_over_alert_enabled'],
+    ['priorityUnderAlertEnabled', 'priority_under_alert_enabled']
+  ]) {
+    if (parsed.data[field] === undefined) continue;
+    db.prepare('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+      .run(key, String(parsed.data[field]));
+    audit(req.user.id, 'update', 'settings', key);
   }
   res.json({ ok: true });
 });
