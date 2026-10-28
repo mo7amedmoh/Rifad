@@ -55,6 +55,7 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
   assert.match(initialSettings.schoolsUrl, /1RQo06DqRHv24M8bh1CmJbOl4c_GmoLPXKkHK_sVIoI8/);
   assert.equal(initialSettings.criticalHours, 24);
   assert.equal(initialSettings.mediumHours, 72);
+  assert.equal(initialSettings.priorityMatrixEnabled, false);
 
   const createdAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   const csv = [
@@ -118,6 +119,31 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
     ].join('\n')
   });
   assert.equal(mediumImportResponse.status, 200);
+
+  db.prepare('UPDATE tickets SET description = ?, priority = ? WHERE case_id = ?')
+    .run('تنظيف أجهزة التكييف', 'حرج', 'CASE-MEDIUM-1');
+  const disabledPrioritySummary = await fetch(`${base}/api/summary?period=all`, { headers: { Cookie: cookie } });
+  assert.equal((await disabledPrioritySummary.json()).priorityAlertCount, 0);
+  const enablePriorityMatrix = await fetch(`${base}/api/settings`, {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'X-CSRF-Token': authData.csrfToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ priorityMatrixEnabled: true })
+  });
+  assert.equal(enablePriorityMatrix.status, 200);
+  const enabledPrioritySummary = await fetch(`${base}/api/summary?period=all`, { headers: { Cookie: cookie } });
+  const priorityAlerts = await enabledPrioritySummary.json();
+  const priorityAlert = priorityAlerts.priorityAlerts.find((item) => item.case_id === 'CASE-MEDIUM-1');
+  assert.equal(priorityAlert.expectedPriority, 'P4');
+  assert.equal(priorityAlert.currentPriority, 'حرج');
+  assert.match(priorityAlert.reason, /صيانة خدمية بسيطة/);
+  const disablePriorityMatrix = await fetch(`${base}/api/settings`, {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'X-CSRF-Token': authData.csrfToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ priorityMatrixEnabled: false })
+  });
+  assert.equal(disablePriorityMatrix.status, 200);
+  db.prepare('UPDATE tickets SET description = ?, priority = ? WHERE case_id = ?')
+    .run('وصف متوسط', 'متوسط', 'CASE-MEDIUM-1');
 
   const ticketsResponse = await fetch(`${base}/api/tickets?q=CASE-TEST-1`, { headers: { Cookie: cookie } });
   const tickets = await ticketsResponse.json();

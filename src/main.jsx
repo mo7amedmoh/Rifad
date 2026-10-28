@@ -218,6 +218,7 @@ function Dashboard({ period, setPeriod, notify }) {
     </section>
     <OpenTicketsSection notify={notify} period={period} view={ticketView} />
     <SlaAlerts items={summary?.approachingSlaTickets || []} count={summary?.approachingSla || 0} />
+    <PriorityAlerts items={summary?.priorityAlerts || []} count={summary?.priorityAlertCount || 0} />
     <SupervisorPerformance rows={summary?.supervisorPerformance || []} best={summary?.bestSupervisor} />
     <div className="data-footnote"><ShieldCheck size={15} /><span>مؤشرات الالتزام محسوبة من حالة SLM للمدارس المطابقة للدليل. تحسب مدة SLA حسب الأولوية وإعدادات النظام ابتداءً من تاريخ الإنشاء.</span></div>
   </div>;
@@ -233,6 +234,12 @@ function SlaAlerts({ items, count }) {
   return <section className={`panel sla-alert-panel ${count ? 'has-sla-alerts' : ''}`}>
     <div className="panel-heading"><div><h2><AlertTriangle size={17} />تنبيهات استباقية لـ SLA</h2><p>تُحدّث تلقائيًا كل دقيقة · البلاغات المفتوحة التي تنتهي مهلتها خلال ساعتين</p></div><span className={`tag ${count ? 'tag-soft-amber' : 'tag-soft-green'}`}>{fmt.format(count)} تنبيه</span></div>
     {items.length ? <div className="sla-alert-list">{items.map((ticket) => <div className="sla-alert-row" key={ticket.id}><span className="sla-alert-icon"><Clock3 size={16} /></span><div><strong>{ticket.school_name || ticket.building_name || 'مدرسة غير محددة'}</strong><small>{ticket.case_id} · {ticket.supervisor || 'مشرف غير محدد'} · {ticket.layer3 || 'طبقة غير محددة'}</small></div><b>{slaText(ticket)}</b></div>)}</div> : <div className="sla-alert-empty"><CheckCircle2 size={17} />لا توجد بلاغات مفتوحة تقترب من تجاوز SLA حاليًا.</div>}
+  </section>;
+}
+function PriorityAlerts({ items, count }) {
+  return <section className={`panel sla-alert-panel ${count ? 'has-sla-alerts' : ''}`}>
+    <div className="panel-heading"><div><h2><AlertCircle size={17} />تنبيهات تدقيق الأولوية</h2><p>توصيات آلية وفق مصفوفة P1–P4 · لا تغيّر أولوية البلاغ تلقائيًا</p></div><span className={`tag ${count ? 'tag-soft-amber' : 'tag-soft-green'}`}>{fmt.format(count)} تنبيه</span></div>
+    {items.length ? <div className="sla-alert-list">{items.map((ticket) => <div className="sla-alert-row" key={ticket.id}><span className="sla-alert-icon"><AlertTriangle size={16} /></span><div><strong>{ticket.school_name || ticket.building_name || 'مدرسة غير محددة'}</strong><small>{ticket.case_id} · الأولوية الحالية: {ticket.currentPriority || 'غير محددة'} · المقترحة: {ticket.expectedPriority} — {ticket.expectedLabel}</small><small>{ticket.reason} · مدة المعالجة المستهدفة في المصفوفة: {fmt.format(ticket.resolutionHours)} ساعة</small></div></div>)}</div> : <div className="sla-alert-empty"><CheckCircle2 size={17} />لا توجد توصيات لتصحيح الأولوية ضمن الفترة المحددة.</div>}
   </section>;
 }
 function OpenTicketsSection({ notify, period, view }) {
@@ -1077,12 +1084,12 @@ function UsersPage({ csrf, session, notify }) {
   </>;
 }
 function SettingsPage({ csrf, notify }) {
-  const [settings, setSettings] = useState({ schoolsUrl: '', criticalHours: 24, mediumHours: 72, importRuns: [] });
+  const [settings, setSettings] = useState({ schoolsUrl: '', criticalHours: 24, mediumHours: 72, priorityMatrixEnabled: false, importRuns: [] });
   const [busy, setBusy] = useState(false);
   useEffect(() => { request('/api/settings').then(setSettings).catch((e) => notify(e.message)); }, [notify]);
   const save = async (event) => {
     event.preventDefault(); setBusy(true);
-    try { await request('/api/settings', { method: 'PUT', csrf, body: JSON.stringify({ schoolsUrl: settings.schoolsUrl, criticalHours: Number(settings.criticalHours), mediumHours: Number(settings.mediumHours) }) }); notify('تم حفظ الإعدادات.'); }
+    try { await request('/api/settings', { method: 'PUT', csrf, body: JSON.stringify({ schoolsUrl: settings.schoolsUrl, criticalHours: Number(settings.criticalHours), mediumHours: Number(settings.mediumHours), priorityMatrixEnabled: settings.priorityMatrixEnabled }) }); notify('تم حفظ الإعدادات.'); }
     catch (error) { notify(error.message); }
     finally { setBusy(false); }
   };
@@ -1097,6 +1104,8 @@ function SettingsPage({ csrf, notify }) {
         <label className="setting-label">مهلة البلاغ المتوسط (ساعة)<input type="number" min="1" max="720" step="1" required value={settings.mediumHours} onChange={(e) => setSettings({ ...settings, mediumHours: e.target.value })} /></label>
       </div>
       <div className="form-hint"><Clock3 size={14} />القيم الافتراضية: الحرج 24 ساعة، والمتوسط 72 ساعة. النطاق المسموح من 1 إلى 720 ساعة.</div>
+      <div className="settings-title sla-settings-title"><span className="settings-icon"><AlertCircle size={19} /></span><div><h2>تدقيق الأولوية وفق المصفوفة</h2><p>فحص اختياري لمقارنة وصف البلاغ وطبقاته مع معايير P1–P4.</p></div></div>
+      <label className="priority-matrix-toggle"><input type="checkbox" checked={settings.priorityMatrixEnabled} onChange={(event) => setSettings({ ...settings, priorityMatrixEnabled: event.target.checked })} /><span><strong>تفعيل تنبيهات الأولوية المقترحة</strong><small>عند التفعيل تظهر التنبيهات أسفل تنبيهات SLA. لا تُعدّل الأولوية المسجلة ولا تغيّر مدد SLA الحالية.</small></span></label>
       <button className="btn btn-primary" disabled={busy}>{busy ? 'جارٍ الحفظ…' : 'حفظ الإعدادات'}</button>
     </form>
     <section className="panel import-history"><div className="panel-heading"><div><h2>سجل الاستيراد</h2><p>آخر عمليات تحديث البلاغات في قاعدة البيانات</p></div><span className="tag tag-soft-blue"><Clock3 size={14} />آخر 8 عمليات</span></div>{settings.importRuns?.length ? settings.importRuns.map((run, i) => <div className="history-row" key={`${run.filename}-${i}`}><span className="history-file"><FileSpreadsheet size={16} /></span><div><strong>{run.filename}</strong><small>{new Date(`${run.imported_at}Z`).toLocaleString('ar-SA')}</small></div><span className="history-number">{fmt.format(run.total_rows)} سجل</span><span className="history-detail">+{fmt.format(run.inserted_rows)} جديد · {fmt.format(run.updated_rows)} محدّث</span></div>) : <EmptyState text="لم يتم استيراد ملفات بعد." />}</section>

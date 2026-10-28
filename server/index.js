@@ -12,6 +12,7 @@ const db = require('./db');
 const SQLiteSessionStore = require('./session-store');
 const { parseCsv, normalizeSchoolNumber } = require('./importer');
 const { DEFAULT_SCHOOLS_URL, parseSchoolCsv, fetchSchoolCsv } = require('./schools');
+const { getPriorityAssessment } = require('./priority-matrix');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -48,6 +49,7 @@ const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHe
 db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('schools_url', ?)").run(DEFAULT_SCHOOLS_URL);
 db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('sla_critical_hours', '24')").run();
 db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('sla_medium_hours', '72')").run();
+db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('priority_matrix_enabled', 'false')").run();
 
 function publicUser(user) {
   return user && { id: user.id, username: user.username, displayName: user.display_name, role: user.role, roleName: roleNames[user.role] };
@@ -126,6 +128,9 @@ function getSlaSettings() {
     criticalHours: Number.isInteger(values.sla_critical_hours) ? values.sla_critical_hours : 24,
     mediumHours: Number.isInteger(values.sla_medium_hours) ? values.sla_medium_hours : 72
   };
+}
+function isPriorityMatrixEnabled() {
+  return db.prepare("SELECT value FROM app_settings WHERE key = 'priority_matrix_enabled'").get()?.value === 'true';
 }
 function asyncRoute(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
@@ -282,6 +287,12 @@ app.get('/api/summary', requireRole(...roles), (req, res) => {
   const activeTickets = tickets
     .filter(isOpen)
     .map((ticket) => ({ ...ticket, sla_remaining_minutes: slaRemainingMinutes(ticket, slaSettings) }));
+  const priorityAlerts = isPriorityMatrixEnabled()
+    ? activeTickets.flatMap((ticket) => {
+      const assessment = getPriorityAssessment(ticket);
+      return assessment ? [{ ...cleanTicket(ticket), ...assessment }] : [];
+    }).slice(0, 20)
+    : [];
   const alertSource = period === 'all' ? tickets : db.prepare(`SELECT t.*, s.name AS school_name, s.supervisor, s.region
     FROM tickets t JOIN schools s ON s.school_number = t.matched_school_number
     WHERE t.deleted_at IS NULL`).all();
@@ -450,6 +461,8 @@ app.get('/api/summary', requireRole(...roles), (req, res) => {
     repeatedBySchool: bySchool(tickets, 'layer3'),
     openTickets: activeTickets.slice(0, 8).map(cleanTicket),
     approachingSlaTickets,
+    priorityAlerts,
+    priorityAlertCount: priorityAlerts.length,
     monthlyCompliance,
     breachedByLayer: breachedCountBy('layer3'),
     breachedByDay,
@@ -967,6 +980,7 @@ app.get('/api/settings', requireRole('admin'), (req, res) => {
   res.json({
     schoolsUrl: db.prepare("SELECT value FROM app_settings WHERE key = 'schools_url'").get()?.value || '',
     ...getSlaSettings(),
+    priorityMatrixEnabled: isPriorityMatrixEnabled(),
     importRuns: db.prepare('SELECT filename, total_rows, inserted_rows, updated_rows, imported_at FROM import_runs ORDER BY id DESC LIMIT 8').all()
   });
 });
@@ -974,8 +988,9 @@ app.put('/api/settings', requireRole('admin'), (req, res) => {
   const parsed = z.object({
     schoolsUrl: z.string().trim().max(2000).url().or(z.literal('')).optional(),
     criticalHours: z.number().int().min(1).max(720).optional(),
-    mediumHours: z.number().int().min(1).max(720).optional()
-  }).refine((value) => value.schoolsUrl !== undefined || value.criticalHours !== undefined || value.mediumHours !== undefined).safeParse(req.body);
+    mediumHours: z.number().int().min(1).max(720).optional(),
+    priorityMatrixEnabled: z.boolean().optional()
+  }).refine((value) => value.schoolsUrl !== undefined || value.criticalHours !== undefined || value.mediumHours !== undefined || value.priorityMatrixEnabled !== undefined).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'تحقق من رابط الشيت ومدد SLA (من ساعة إلى 720 ساعة).' });
   if (parsed.data.schoolsUrl) {
     try {
@@ -992,6 +1007,12 @@ app.put('/api/settings', requireRole('admin'), (req, res) => {
     if (parsed.data[field] === undefined) continue;
     db.prepare('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, String(parsed.data[field]));
     audit(req.user.id, 'update', 'settings', key);
+  }
+  if (parsed.data.priorityMatrixEnabled !== undefined) {
+    const enabled = String(parsed.data.priorityMatrixEnabled);
+    db.prepare('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+      .run('priority_matrix_enabled', enabled);
+    audit(req.user.id, 'update', 'settings', 'priority_matrix_enabled');
   }
   res.json({ ok: true });
 });
