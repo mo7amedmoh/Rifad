@@ -1,0 +1,40 @@
+{
+  "name": "rifad-incident-manager",
+  "version": "1.0.0",
+  "private": true,
+  "engines": { "node": ">=22.5.0" },
+  "description": "Arabic-first incident and SLA management for Shalfa",
+  "license": "UNLICENSED",
+  "author": "Mohamed Elshenawy",
+  "company": "Shalfa",
+  "scripts": {
+    "dev": "concurrently \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "node --watch server/index.js",
+    "dev:client": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "start": "node server/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "csv-parse": "^7.0.3",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "express-session": "^1.18.1",
+    "helmet": "^8.1.0",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.2",
+    "html-to-image": "^1.11.11",
+    "postcss": "^8.5.1",
+    "tailwindcss": "^3.4.17",
+    "vite": "^6.0.7"
+  }
+}
