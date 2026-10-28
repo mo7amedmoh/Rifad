@@ -593,7 +593,7 @@ app.post('/api/import/tickets', requireRole('admin', 'receiver'),
       next(error);
     }
   });
-app.patch('/api/tickets/:id/breach-reason', requireRole('admin', 'engineer'), (req, res) => {
+app.patch('/api/tickets/:id/breach-reason', requireRole('admin'), (req, res) => {
   const parsed = z.object({ reason: z.enum(breachReasons), note: z.string().trim().max(500).optional().default('') }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'اختر سببًا صحيحًا للاختراق.' });
   if (parsed.data.reason === 'أخرى' && !parsed.data.note) return res.status(400).json({ error: 'اكتب سبب الاختراق عند اختيار «أخرى».' });
@@ -670,7 +670,7 @@ app.delete('/api/schools', requireRole('admin'), (req, res) => {
   })();
   res.json({ deleted: count, message: `تم حذف ${count} مدرسة من الدليل. لم تُحذف البلاغات أو سجلات التغييرات.` });
 });
-app.delete('/api/schools/:schoolNumber', requireRole('admin', 'receiver'), (req, res) => {
+app.delete('/api/schools/:schoolNumber', requireRole('admin'), (req, res) => {
   const schoolNumber = normalizeSchoolNumber(req.params.schoolNumber);
   const result = db.prepare('DELETE FROM schools WHERE school_number = ?').run(schoolNumber);
   if (!result.changes) return res.status(404).json({ error: 'المدرسة غير موجودة.' });
@@ -1011,17 +1011,31 @@ app.post('/api/users', requireRole('admin'), (req, res) => {
   }
 });
 app.patch('/api/users/:id', requireRole('admin'), (req, res) => {
-  if (Number(req.params.id) === req.user.id) return res.status(400).json({ error: 'لا يمكن تعطيل حسابك الحالي.' });
-  const parsed = z.object({ active: z.boolean() }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'قيمة حالة الحساب غير صالحة.' });
+  const parsed = z.object({
+    active: z.boolean().optional(),
+    role: z.enum(roles).optional(),
+    password: z.string().min(12).max(128).optional()
+  }).refine((value) => Object.keys(value).length > 0).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'أدخل صلاحية أو حالة صالحة وكلمة مرور من 12 خانة على الأقل.' });
   const target = db.prepare('SELECT role, active FROM users WHERE id = ?').get(req.params.id);
   if (!target) return res.status(404).json({ error: 'المستخدم غير موجود.' });
-  if (target.role === 'admin' && target.active && !parsed.data.active &&
+  const newRole = parsed.data.role || target.role;
+  const newActive = parsed.data.active === undefined ? Boolean(target.active) : parsed.data.active;
+  if (Number(req.params.id) === req.user.id &&
+      (newActive !== Boolean(target.active) || newRole !== target.role || parsed.data.password)) {
+    return res.status(400).json({ error: 'لا يمكن تعديل صلاحيات أو كلمة مرور حسابك الحالي من هذه الصفحة. استخدم صفحة حسابي.' });
+  }
+  if (target.role === 'admin' && target.active && (!newActive || newRole !== 'admin') &&
       db.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'admin' AND active = 1").get().count <= 1) {
     return res.status(409).json({ error: 'يجب إبقاء مسؤول نظام واحد نشط على الأقل.' });
   }
-  const result = db.prepare('UPDATE users SET active = ? WHERE id = ?').run(Number(parsed.data.active), req.params.id);
+  const passwordHash = parsed.data.password ? bcrypt.hashSync(parsed.data.password, 12) : null;
+  const result = db.prepare(`UPDATE users SET active = ?, role = ?, password_hash = COALESCE(?, password_hash)
+    WHERE id = ?`).run(Number(newActive), newRole, passwordHash, req.params.id);
   if (!result.changes) return res.status(404).json({ error: 'المستخدم غير موجود.' });
+  if (passwordHash) {
+    db.prepare("DELETE FROM sessions WHERE json_extract(sess, '$.userId') = ?").run(Number(req.params.id));
+  }
   audit(req.user.id, 'update', 'user', req.params.id);
   res.json({ ok: true });
 });

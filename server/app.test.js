@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const bcrypt = require('bcryptjs');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rifad-test-'));
 process.env.DATABASE_PATH = path.join(tempDir, 'rifad.sqlite');
@@ -171,6 +172,68 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
     body: JSON.stringify({ reason: 'تعذر دخول المدرسة' })
   });
   assert.equal(validReasonResponse.status, 200);
+
+  const receiverUserResponse = await fetch(`${base}/api/users`, {
+    method: 'POST',
+    headers: { Cookie: cookie, 'X-CSRF-Token': authData.csrfToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'receiver-test', displayName: 'متلقي تجريبي', password: 'a-receiver-password-123', role: 'receiver' })
+  });
+  assert.equal(receiverUserResponse.status, 201);
+  const receiverUserId = (await receiverUserResponse.json()).id;
+  const receiverLoginSessionResponse = await fetch(`${base}/api/session`);
+  const receiverLoginSession = await receiverLoginSessionResponse.json();
+  const receiverLoginCookie = receiverLoginSessionResponse.headers.get('set-cookie').split(';')[0];
+  const receiverLoginResponse = await fetch(`${base}/api/login`, {
+    method: 'POST',
+    headers: { Cookie: receiverLoginCookie, 'X-CSRF-Token': receiverLoginSession.csrfToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'receiver-test', password: 'a-receiver-password-123' })
+  });
+  assert.equal(receiverLoginResponse.status, 200);
+  const receiverAuth = await receiverLoginResponse.json();
+  const receiverCookie = receiverLoginResponse.headers.get('set-cookie').split(';')[0];
+  const receiverRequest = (url, options = {}) => fetch(`${base}${url}`, {
+    ...options,
+    headers: {
+      Cookie: receiverCookie,
+      ...(options.method && options.method !== 'GET' ? { 'X-CSRF-Token': receiverAuth.csrfToken } : {}),
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.headers || {})
+    }
+  });
+  assert.equal((await receiverRequest(`/api/tickets/${ticketId}/breach-reason`, {
+    method: 'PATCH', body: JSON.stringify({ reason: 'تعذر دخول المدرسة' })
+  })).status, 403);
+  assert.equal((await receiverRequest(`/api/tickets/${ticketId}`, { method: 'DELETE' })).status, 403);
+  assert.equal((await receiverRequest('/api/schools/123456', { method: 'DELETE' })).status, 403);
+  assert.equal((await receiverRequest('/api/schools', { method: 'DELETE' })).status, 403);
+  assert.equal((await receiverRequest(`/api/users/${receiverUserId}`, {
+    method: 'PATCH', body: JSON.stringify({ role: 'admin' })
+  })).status, 403);
+  assert.equal((await fetch(`${base}/api/users/${authData.user.id}`, {
+    method: 'PATCH',
+    headers: { Cookie: cookie, 'X-CSRF-Token': authData.csrfToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role: 'viewer' })
+  })).status, 400);
+
+  const updateReceiverResponse = await fetch(`${base}/api/users/${receiverUserId}`, {
+    method: 'PATCH',
+    headers: { Cookie: cookie, 'X-CSRF-Token': authData.csrfToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role: 'engineer', password: 'a-new-receiver-password-456' })
+  });
+  assert.equal(updateReceiverResponse.status, 200);
+  assert.equal(db.prepare('SELECT role FROM users WHERE id = ?').get(receiverUserId).role, 'engineer');
+  assert.equal(bcrypt.compareSync('a-new-receiver-password-456', db.prepare('SELECT password_hash FROM users WHERE id = ?').get(receiverUserId).password_hash), true);
+  assert.equal((await (await fetch(`${base}/api/session`, { headers: { Cookie: receiverCookie } })).json()).user, null);
+  const updatedReceiverLoginSessionResponse = await fetch(`${base}/api/session`);
+  const updatedReceiverLoginSession = await updatedReceiverLoginSessionResponse.json();
+  const updatedReceiverLoginCookie = updatedReceiverLoginSessionResponse.headers.get('set-cookie').split(';')[0];
+  const updatedReceiverLoginResponse = await fetch(`${base}/api/login`, {
+    method: 'POST',
+    headers: { Cookie: updatedReceiverLoginCookie, 'X-CSRF-Token': updatedReceiverLoginSession.csrfToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'receiver-test', password: 'a-new-receiver-password-456' })
+  });
+  assert.equal(updatedReceiverLoginResponse.status, 200);
+  assert.equal((await updatedReceiverLoginResponse.json()).user.role, 'engineer');
 
   const resolvedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   const closedCreatedAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();

@@ -129,7 +129,7 @@ function App() {
           {currentPage === 'tickets' && <Tickets session={session} csrf={csrf} notify={notify} />}
           {currentPage === 'schools' && <Schools csrf={csrf} session={session} notify={notify} />}
           {currentPage === 'account' && <AccountPage session={session} csrf={csrf} notify={notify} onUpdated={(data) => { setSession(data.user); setCsrf(data.csrfToken); }} />}
-          {currentPage === 'users' && <UsersPage csrf={csrf} notify={notify} />}
+          {currentPage === 'users' && <UsersPage csrf={csrf} session={session} notify={notify} />}
           {currentPage === 'settings' && <SettingsPage csrf={csrf} notify={notify} />}
         </div>
         <footer className="page-footer"><span>رِفاد لإدارة البلاغات</span><span>© Mohamed Elshenawy · Shalfa · Internal Private</span></footer>
@@ -795,7 +795,7 @@ function Tickets({ session, csrf, notify }) {
             <div className="reason-cell">
               {reasonEdit?.id === ticket.id
                 ? <ReasonForm ticket={ticket} onSave={saveReason} onCancel={() => setReasonEdit(null)} />
-                : <button className={`reason-button ${ticket.breach_reason ? 'has-reason' : ''}`} disabled={!['admin', 'engineer'].includes(session.role)} onClick={() => setReasonEdit({ id: ticket.id })}>{ticket.breach_reason || 'إضافة سبب'}{!ticket.breach_reason && <Plus size={13} />}</button>}
+                : <button className={`reason-button ${ticket.breach_reason ? 'has-reason' : ''}`} disabled={session.role !== 'admin'} onClick={() => setReasonEdit({ id: ticket.id })}>{ticket.breach_reason || 'إضافة سبب'}{!ticket.breach_reason && session.role === 'admin' && <Plus size={13} />}</button>}
             </div>
           ) : <span className="muted">—</span>}</td>
           {session.role === 'admin' && <td><button className="icon-btn danger-icon" title="إخفاء البلاغ" onClick={() => deleteTicket(ticket)}><X size={16} /></button></td>}
@@ -933,7 +933,7 @@ function Schools({ csrf, session, notify }) {
         <td>{new Intl.DateTimeFormat('ar-SA', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(school.updated_at))}</td>
         {canEdit && <td><div className="school-actions">{activeEdit
           ? <><button className="btn btn-small btn-primary" onClick={updateSchool} disabled={busy}><Check size={14} />حفظ</button><button className="btn btn-small btn-outline" onClick={() => setEditing(null)} disabled={busy}>إلغاء</button></>
-          : <><button className="btn btn-small btn-outline" onClick={() => setEditing({ originalNumber: school.school_number, school_number: school.school_number, name: school.name, supervisor: school.supervisor || '', region: school.region || '', school_type: school.school_type || '', building_type: school.building_type || '', occupancy_size: school.occupancy_size || '' })} disabled={busy}>تعديل</button><button className="icon-btn danger-icon" title="حذف المدرسة" aria-label={`حذف ${school.name}`} onClick={() => deleteSchool(school)} disabled={busy}><X size={15} /></button></>}</div></td>}
+          : <><button className="btn btn-small btn-outline" onClick={() => setEditing({ originalNumber: school.school_number, school_number: school.school_number, name: school.name, supervisor: school.supervisor || '', region: school.region || '', school_type: school.school_type || '', building_type: school.building_type || '', occupancy_size: school.occupancy_size || '' })} disabled={busy}>تعديل</button>{session.role === 'admin' && <button className="icon-btn danger-icon" title="حذف المدرسة" aria-label={`حذف ${school.name}`} onClick={() => deleteSchool(school)} disabled={busy}><X size={15} /></button>}</>}</div></td>}
       </tr>;
     }) : <tr><td colSpan={canEdit ? '8' : '7'}><EmptyState text="لا توجد مدارس بعد. استورد ملف CSV يحتوي على رقم المدرسة واسمها." /></td></tr>}</tbody></table></div></section>
     <section className="panel sync-panel"><div className="sync-icon"><FileSpreadsheet size={20} /></div><div className="sync-copy"><strong>مزامنة من شيت أونلاين</strong><span>تطابق المزامنة رقم المدرسة، وتحدّث الأرقام المعدّلة عند تطابق اسم فريد. المدارس المضافة يدويًا تبقى في الدليل.</span></div>{session.role === 'admin' && <button className="btn btn-outline" onClick={sync} disabled={busy}><Activity size={16} />{busy ? 'جارٍ المزامنة…' : 'مزامنة الآن'}</button>}</section>
@@ -1034,10 +1034,11 @@ function AccountPage({ session, csrf, notify, onUpdated }) {
     </form>
   </>;
 }
-function UsersPage({ csrf, notify }) {
+function UsersPage({ csrf, session, notify }) {
   const [users, setUsers] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ username: '', displayName: '', password: '', role: 'viewer' });
+  const [editingUser, setEditingUser] = useState(null);
   const [busy, setBusy] = useState(false);
   const load = useCallback(() => request('/api/users').then((data) => setUsers(data.items)).catch((e) => notify(e.message)), [notify]);
   useEffect(() => { load(); }, [load]);
@@ -1051,10 +1052,28 @@ function UsersPage({ csrf, notify }) {
     try { await request(`/api/users/${user.id}`, { method: 'PATCH', csrf, body: JSON.stringify({ active: !user.active }) }); notify('تم تحديث حالة الحساب.'); await load(); }
     catch (error) { notify(error.message); }
   };
+  const saveUser = async (event) => {
+    event.preventDefault();
+    if (!editingUser) return;
+    setBusy(true);
+    try {
+      const { id, role, password } = editingUser;
+      await request(`/api/users/${id}`, {
+        method: 'PATCH',
+        csrf,
+        body: JSON.stringify({ role, ...(password ? { password } : {}) })
+      });
+      notify('تم تحديث صلاحيات الحساب وكلمة المرور.');
+      setEditingUser(null);
+      await load();
+    } catch (error) { notify(error.message); }
+    finally { setBusy(false); }
+  };
   return <><PageHeading eyebrow="المستخدمون والصلاحيات" title="إدارة الحسابات" description="تحكم في الوصول إلى بيانات البلاغات حسب دور كل مستخدم." action={<button className="btn btn-primary" onClick={() => setShowForm(!showForm)}><Plus size={17} />إضافة حساب</button>} />
     {showForm && <form className="panel user-form" onSubmit={addUser}><div className="panel-heading"><div><h2>حساب جديد</h2><p>كلمة المرور يجب ألا تقل عن 12 خانة.</p></div><button type="button" className="icon-btn" onClick={() => setShowForm(false)}><X size={18} /></button></div><div className="form-grid"><label>الاسم الكامل<input required value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} /></label><label>اسم المستخدم<input required minLength="3" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></label><label>كلمة المرور<input required type="password" minLength="12" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></label><label>الدور<select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}><option value="receiver">متلقي البلاغات</option><option value="engineer">مهندس منطقة</option><option value="viewer">متابع</option></select></label></div><button className="btn btn-primary" disabled={busy}>{busy ? 'جارٍ الإنشاء…' : 'إنشاء الحساب'}</button></form>}
-    <div className="panel users-panel"><div className="panel-heading"><div><h2>حسابات النظام</h2><p>{fmt.format(users.length)} مستخدم</p></div><span className="tag tag-soft-blue"><ShieldCheck size={14} />صلاحيات مفعّلة</span></div><div className="table-wrap"><table className="tickets-table users-table"><thead><tr><th>المستخدم</th><th>اسم الدخول</th><th>الدور</th><th>تاريخ الإنشاء</th><th>الحالة</th><th /></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td><div className="user-table-name"><span className="avatar">{user.display_name.slice(0, 1)}</span><strong>{user.display_name}</strong></div></td><td>{user.username}</td><td><span className="tag tag-soft-blue">{roleLabels[user.role]}</span></td><td>{new Intl.DateTimeFormat('ar-SA', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(`${user.created_at}Z`))}</td><td><span className={`account-status ${user.active ? 'account-active' : 'account-disabled'}`}><i />{user.active ? 'نشط' : 'معطل'}</span></td><td><button className="btn btn-small btn-outline" onClick={() => toggle(user)}>{user.active ? 'تعطيل' : 'تفعيل'}</button></td></tr>)}</tbody></table></div></div>
-    <div className="roles-grid"><div className="role-card"><span className="role-icon role-blue"><ShieldCheck size={17} /></span><div><strong>مسؤول النظام</strong><span>الحسابات، الإعدادات، الحذف وإدارة البيانات.</span></div></div><div className="role-card"><span className="role-icon role-amber"><CloudUpload size={17} /></span><div><strong>متلقي البلاغات</strong><span>استيراد ملفات البلاغات وقائمة المدارس.</span></div></div><div className="role-card"><span className="role-icon role-green"><Wrench size={17} /></span><div><strong>مهندس المنطقة</strong><span>تحديث أسباب الاختراق ومتابعة البلاغات.</span></div></div><div className="role-card"><span className="role-icon role-purple"><Users size={17} /></span><div><strong>متابع</strong><span>عرض البلاغات والتقارير دون تعديل.</span></div></div></div>
+    {editingUser && <form className="panel user-form" onSubmit={saveUser}><div className="panel-heading"><div><h2>تعديل حساب {editingUser.displayName}</h2><p>اترك كلمة المرور فارغة للاحتفاظ بكلمة المرور الحالية.</p></div><button type="button" className="icon-btn" onClick={() => setEditingUser(null)} aria-label="إغلاق تعديل الحساب"><X size={18} /></button></div><div className="form-grid"><label>الصلاحية<select required value={editingUser.role} disabled={editingUser.id === session.id} onChange={(event) => setEditingUser({ ...editingUser, role: event.target.value })}><option value="admin">مسؤول النظام</option><option value="receiver">متلقي البلاغات</option><option value="engineer">مهندس منطقة</option><option value="viewer">متابع</option></select></label><label>كلمة مرور جديدة<input type="password" minLength="12" maxLength="128" autoComplete="new-password" disabled={editingUser.id === session.id} value={editingUser.password} onChange={(event) => setEditingUser({ ...editingUser, password: event.target.value })} placeholder={editingUser.id === session.id ? 'استخدم صفحة حسابي' : '12 خانة على الأقل'} /></label></div>{editingUser.id === session.id && <div className="form-hint"><LockKeyhole size={14} />لتغيير كلمة مرور حسابك الحالي، استخدم صفحة «حسابي».</div>}<button className="btn btn-primary" disabled={busy}>{busy ? 'جارٍ الحفظ…' : 'حفظ التعديلات'}</button></form>}
+    <div className="panel users-panel"><div className="panel-heading"><div><h2>حسابات النظام</h2><p>{fmt.format(users.length)} مستخدم</p></div><span className="tag tag-soft-blue"><ShieldCheck size={14} />صلاحيات مفعّلة</span></div><div className="table-wrap"><table className="tickets-table users-table"><thead><tr><th>المستخدم</th><th>اسم الدخول</th><th>الدور</th><th>تاريخ الإنشاء</th><th>الحالة</th><th>الإجراءات</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td><div className="user-table-name"><span className="avatar">{user.display_name.slice(0, 1)}</span><strong>{user.display_name}</strong></div></td><td>{user.username}</td><td><span className="tag tag-soft-blue">{roleLabels[user.role]}</span></td><td>{new Intl.DateTimeFormat('ar-SA', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(`${user.created_at}Z`))}</td><td><span className={`account-status ${user.active ? 'account-active' : 'account-disabled'}`}><i />{user.active ? 'نشط' : 'معطل'}</span></td><td><div className="user-actions"><button className="btn btn-small btn-outline" onClick={() => setEditingUser({ id: user.id, displayName: user.display_name, role: user.role, password: '' })}>تعديل</button><button className="btn btn-small btn-outline" onClick={() => toggle(user)} disabled={user.id === session.id}>{user.active ? 'تعطيل' : 'تفعيل'}</button></div></td></tr>)}</tbody></table></div></div>
+    <div className="roles-grid"><div className="role-card"><span className="role-icon role-blue"><ShieldCheck size={17} /></span><div><strong>مسؤول النظام</strong><span>الحسابات، الإعدادات، حذف المدارس والبلاغات وتعديلها.</span></div></div><div className="role-card"><span className="role-icon role-amber"><CloudUpload size={17} /></span><div><strong>متلقي البلاغات</strong><span>استيراد البلاغات والمدارس وتعديل بيانات المدارس دون حذفها.</span></div></div><div className="role-card"><span className="role-icon role-green"><Wrench size={17} /></span><div><strong>مهندس المنطقة</strong><span>عرض ومتابعة البلاغات.</span></div></div><div className="role-card"><span className="role-icon role-purple"><Users size={17} /></span><div><strong>متابع</strong><span>عرض البلاغات والتقارير دون تعديل.</span></div></div></div>
   </>;
 }
 function SettingsPage({ csrf, notify }) {
