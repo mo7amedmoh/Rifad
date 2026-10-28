@@ -55,10 +55,26 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+function getRequestUrl(req) {
+  const requestUrl = new URL(req.url, 'https://vercel.invalid');
+  if (requestUrl.pathname !== '/api/[...path]') return requestUrl;
+
+  const routePath = req.query?.path;
+  if (!routePath) return requestUrl;
+  const segments = (Array.isArray(routePath) ? routePath : [routePath])
+    .flatMap((segment) => String(segment).split('/'))
+    .filter(Boolean);
+  if (!segments.length) return requestUrl;
+
+  requestUrl.pathname = `/api/${segments.map(encodeURIComponent).join('/')}`;
+  requestUrl.searchParams.delete('path');
+  return requestUrl;
+}
+
 function createVercelApiProxy() {
   return async function vercelApiProxy(req, res) {
     try {
-      const requestUrl = new URL(req.url, 'https://vercel.invalid');
+      const requestUrl = getRequestUrl(req);
       if (requestUrl.origin !== 'https://vercel.invalid' || !requestUrl.pathname.startsWith('/api/')) {
         return sendJson(res, 404, { error: 'المسار غير موجود.' });
       }
@@ -112,4 +128,4 @@ function createVercelApiProxy() {
   };
 }
 
-module.exports = { createVercelApiProxy };
+module.exports = { createVercelApiProxy, getRequestUrl };

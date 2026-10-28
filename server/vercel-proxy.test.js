@@ -2,7 +2,17 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const { brotliCompressSync } = require('node:zlib');
-const { createVercelApiProxy } = require('./vercel-proxy');
+const { createVercelApiProxy, getRequestUrl } = require('./vercel-proxy');
+
+test('proxy restores nested API paths rewritten to the Vercel catch-all function', () => {
+  const requestUrl = getRequestUrl({
+    url: '/api/[...path]?status=active',
+    query: { path: ['import', 'tickets'], status: 'active' }
+  });
+
+  assert.equal(requestUrl.pathname, '/api/import/tickets');
+  assert.equal(requestUrl.search, '?status=active');
+});
 
 function listen(server) {
   return new Promise((resolve, reject) => {
