@@ -914,7 +914,7 @@ app.use('/api', (error, req, res, next) => {
   if (error.type === 'entity.parse.failed') return res.status(400).json({ error: 'تنسيق البيانات المرسلة غير صالح.' });
   res.status(500).json({ error: 'حدث خطأ داخلي. حاول مجددًا لاحقًا.' });
 });
-if (production) {
+if (production && process.env.SERVE_CLIENT !== 'false') {
   const webRoot = path.resolve(__dirname, '../dist');
   app.use(express.static(webRoot));
   app.get('*', (req, res) => res.sendFile(path.join(webRoot, 'index.html')));

@@ -20,6 +20,7 @@
 ### Render (خادم Express)
 
 - `NODE_ENV=production`
+- `SERVE_CLIENT=false` — Render يشغّل API فقط؛ واجهة الويب وملفات `dist` تُقدّم عبر Vercel.
 - `DATABASE_PATH=/var/data/rifad.sqlite` — مسار القرص الدائم المعرّف في `render.yaml`.
 - `SESSION_SECRET` — سر جلسات يولّده Render؛ لا تعِد استخدام سر التطوير.
 - `INITIAL_ADMIN_SETUP_TOKEN` — سر مؤقت بطول 32 إلى 256 محرفًا؛ احذفه بعد إنشاء أول مسؤول.
