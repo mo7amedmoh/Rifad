@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: rifad-api
+    runtime: node
+    plan: starter
+    region: frankfurt
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /healthz
+    disk:
+      name: rifad-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_PATH
+        value: /var/data/rifad.sqlite
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: INITIAL_ADMIN_SETUP_TOKEN
+        sync: false

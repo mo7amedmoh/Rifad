@@ -170,6 +170,7 @@ app.use('/api', (req, res, next) => {
   if (origin && origin !== allowedOrigin && !allowedDevelopmentOrigin) return res.status(403).json({ error: 'مصدر الطلب غير مسموح.' });
   next();
 });
+app.get('/healthz', (req, res) => res.status(200).json({ ok: true }));
 app.get('/api/session', (req, res) => {
   if (!req.session.csrfToken) req.session.csrfToken = crypto.randomBytes(32).toString('hex');
   const user = req.session.userId ? db.prepare('SELECT id, username, display_name, role, active FROM users WHERE id = ?').get(req.session.userId) : null;
@@ -924,6 +925,6 @@ if (require.main === module) {
   syncSchoolData(schoolUrl)
     .then((count) => console.info(`School data synchronized: ${count} records.`))
     .catch((error) => console.error(`Automatic school synchronization failed: ${error.message}`))
-    .finally(() => app.listen(PORT, '127.0.0.1', () => console.log(`Rifad API listening on http://127.0.0.1:${PORT}`)));
+    .finally(() => app.listen(PORT, '0.0.0.0', () => console.log(`Rifad API listening on port ${PORT}`)));
 }
 module.exports = app;

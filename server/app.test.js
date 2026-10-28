@@ -19,6 +19,10 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
   const base = `http://127.0.0.1:${server.address().port}`;
+  const healthResponse = await fetch(`${base}/healthz`);
+  assert.equal(healthResponse.status, 200);
+  assert.deepEqual(await healthResponse.json(), { ok: true });
+
   let cookie = '';
   const sessionResponse = await fetch(`${base}/api/session`);
   assert.equal(sessionResponse.status, 200);
