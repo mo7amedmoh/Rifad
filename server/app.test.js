@@ -335,8 +335,8 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
 
   const nativeFetch = global.fetch;
   const schoolSheetCsv = [
-    'رقم المدرسة,اسم المدرسة,المشرف المسؤول,المنطقة,نوع المدرسة,نوع المبنى,حجم الإشغال',
-    '777888,مدرسة تجريبية مصححة,مشرف الشيت,الرياض,حكومية,مبنى تعليمي,350'
+    'ID,اسم الموقع,الرقم الوزاري,العنوان,زون,مجموعة,خط العرض,خط الطول,المسئول,رقم الجوال,مشرف الشركة,رقم الجوال,مهندس الشركة,رقم الجوال,نوع الملكية,نوع المبني,الحالة,maintenance,stage,gender,فصول تعليمية,occupancy_size,study_time,المبنى الملحق',
+    '10753,مدرسة تجريبية مصححة,777888,منطقة الرياض,G2-Z6,1,24.74895617,46.63827736,مسؤول المدرسة,500000001,مشرف الشيت,500000002,مهندس المنطقة,500000003,مستقل,كبير,مستخدم,تشغيل وصيانة,المتوسطة,بنين,12,كبير,صباح,ملحق'
   ].join('\n');
   global.fetch = (input, options) => String(input).startsWith(base)
     ? nativeFetch(input, options)
@@ -357,6 +357,13 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM schools').get().count, 1);
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM tickets WHERE matched_school_number = ? AND school_match_override = 1').get('777888').count, 4);
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM school_change_log WHERE school_number = ?').get('777888').count > 0, true);
+    const schoolDetailsResponse = await nativeFetch(`${base}/api/schools/777888`, { headers: { Cookie: cookie } });
+    assert.equal(schoolDetailsResponse.status, 200);
+    const schoolDetails = (await schoolDetailsResponse.json()).item;
+    assert.equal(schoolDetails.source_data.length, 24);
+    assert.equal(schoolDetails.source_data[0].label, 'معرّف السجل');
+    assert.ok(schoolDetails.source_data.some((field) => field.label === 'خط العرض' && field.value === '24.74895617'));
+    assert.ok(schoolDetails.source_data.some((field) => field.label === 'الصيانة' && field.value === 'تشغيل وصيانة'));
 
     const addSchoolResponse = await nativeFetch(`${base}/api/schools`, {
       method: 'POST',

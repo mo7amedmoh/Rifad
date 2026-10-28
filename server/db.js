@@ -36,6 +36,7 @@ db.exec(`
     school_type TEXT NOT NULL DEFAULT '',
     building_type TEXT NOT NULL DEFAULT '',
     occupancy_size TEXT NOT NULL DEFAULT '',
+    source_data TEXT NOT NULL DEFAULT '[]',
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
   CREATE TABLE IF NOT EXISTS tickets (
@@ -107,5 +108,6 @@ const schoolColumns = db.prepare('PRAGMA table_info(schools)').all().map((column
 if (!schoolColumns.includes('school_type')) db.exec("ALTER TABLE schools ADD COLUMN school_type TEXT NOT NULL DEFAULT ''");
 if (!schoolColumns.includes('building_type')) db.exec("ALTER TABLE schools ADD COLUMN building_type TEXT NOT NULL DEFAULT ''");
 if (!schoolColumns.includes('occupancy_size')) db.exec("ALTER TABLE schools ADD COLUMN occupancy_size TEXT NOT NULL DEFAULT ''");
+if (!schoolColumns.includes('source_data')) db.exec("ALTER TABLE schools ADD COLUMN source_data TEXT NOT NULL DEFAULT '[]'");
 
 module.exports = db;

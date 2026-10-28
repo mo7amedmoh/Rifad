@@ -33,6 +33,34 @@ test('reads the published P, T, and V school attributes by their source headers'
   assert.equal(school.occupancySize, '350');
 });
 
+test('preserves every school-sheet column, translates English headers, and retains coordinates', () => {
+  const headers = [
+    'ID', 'اسم الموقع', 'الرقم الوزاري', 'العنوان', 'زون', 'مجموعة', 'خط العرض', 'خط الطول',
+    'المسئول', 'رقم الجوال', 'مشرف الشركة', 'رقم الجوال', 'مهندس الشركة', 'رقم الجوال',
+    'نوع الملكية', 'نوع المبني', 'الحالة', 'maintenance', 'stage', 'gender',
+    'فصول تعليمية', 'occupancy_size', 'study_time', 'المبنى الملحق'
+  ];
+  const values = [
+    '10753', 'مدرسة تجريبية', '123456', 'الرياض', 'G2-Z6', '1', '24.74895617', '46.63827736',
+    'المسؤول', '500000001', 'المشرف', '500000002', 'المهندس', '500000003',
+    'مستقل', 'كبير', 'مستخدم', 'تشغيل وصيانة', 'المتوسطة', 'بنين',
+    '12', 'كبير', 'صباح', 'ملحق'
+  ];
+  const [school] = parseSchoolCsv(Buffer.from(`${headers.join(',')}\n${values.join(',')}\n`));
+  assert.equal(school.sourceData.length, 24);
+  assert.deepEqual(school.sourceData.slice(0, 3).map((field) => field.label), ['معرّف السجل', 'اسم الموقع', 'الرقم الوزاري']);
+  assert.deepEqual(school.sourceData.slice(9, 14).map((field) => field.label), [
+    'رقم الجوال للمسؤول', 'مشرف الشركة', 'رقم الجوال لمشرف الشركة', 'مهندس الشركة', 'رقم الجوال لمهندس الشركة'
+  ]);
+  assert.ok(school.sourceData.some((field) => field.label === 'الصيانة' && field.value === 'تشغيل وصيانة'));
+  assert.ok(school.sourceData.some((field) => field.label === 'المرحلة' && field.value === 'المتوسطة'));
+  assert.ok(school.sourceData.some((field) => field.label === 'النوع' && field.value === 'بنين'));
+  assert.ok(school.sourceData.some((field) => field.label === 'حجم المبنى' && field.value === 'كبير'));
+  assert.ok(school.sourceData.some((field) => field.label === 'الفترة الدراسية' && field.value === 'صباح'));
+  assert.equal(school.latitude, '24.74895617');
+  assert.equal(school.longitude, '46.63827736');
+});
+
 test('uses the P, T, and V positions when optional school attribute headers are unavailable', () => {
   const headers = Array(24).fill('');
   headers[1] = 'رقم المدرسة';

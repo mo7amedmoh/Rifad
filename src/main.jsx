@@ -819,6 +819,7 @@ function Schools({ csrf, session, notify }) {
   const [total, setTotal] = useState(0);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [selectedSchool, setSelectedSchool] = useState(null);
   const [adding, setAdding] = useState(false);
   const [newSchool, setNewSchool] = useState({
     schoolNumber: '', name: '', supervisor: '', region: '', schoolType: '', buildingType: '', occupancySize: ''
@@ -920,13 +921,12 @@ function Schools({ csrf, session, notify }) {
       ['buildingType', 'نوع المبنى'],
       ['occupancySize', 'حجم الإشغال']
     ].map(([field, label, required]) => <label key={field}>{label}<input required={required} value={newSchool[field]} onChange={(event) => setNewSchool({ ...newSchool, [field]: event.target.value })} /></label>)}<div className="school-create-actions"><button className="btn btn-primary" disabled={busy}><Check size={15} />حفظ المدرسة</button><button type="button" className="btn btn-outline" onClick={() => setAdding(false)} disabled={busy}>إلغاء</button></div></form>}
-    <div className="table-wrap"><table className="tickets-table schools-table"><thead><tr><th>الرقم الوزاري</th><th>اسم المدرسة</th><th>المشرف المسؤول</th><th>المنطقة</th><th>النوع (T)</th><th>نوع المبنى (P)</th><th>الإشغال (V)</th><th>آخر تحديث</th>{canEdit && <th>إجراءات</th>}</tr></thead><tbody>{items.length ? items.map((school) => {
+    <div className="table-wrap"><table className="tickets-table schools-table"><thead><tr><th>الرقم الوزاري</th><th>اسم المدرسة</th><th>المشرف المسؤول</th><th>النوع</th><th>نوع المبنى</th><th>حجم المبنى</th><th>آخر تحديث</th>{canEdit && <th>إجراءات</th>}</tr></thead><tbody>{items.length ? items.map((school) => {
       const activeEdit = editing?.originalNumber === school.school_number;
       return <tr key={school.school_number}>
-        <td>{activeEdit ? editInput('school_number', 'الرقم الوزاري', editing.school_number, true) : <span className="school-number">{school.school_number}</span>}</td>
-        <td>{activeEdit ? editInput('name', 'اسم المدرسة', editing.name, true) : <strong className="school-name">{school.name}</strong>}</td>
+        <td>{activeEdit ? editInput('school_number', 'الرقم الوزاري', editing.school_number, true) : <button className="school-number school-number-link" onClick={() => setSelectedSchool(school.school_number)} aria-label={`عرض تفاصيل ${school.name}`}>{school.school_number}</button>}</td>
+        <td>{activeEdit ? <div className="school-edit-name">{editInput('name', 'اسم المدرسة', editing.name, true)}<label>المنطقة{editInput('region', 'المنطقة', editing.region)}</label></div> : <strong className="school-name">{school.name}</strong>}</td>
         <td>{activeEdit ? editInput('supervisor', 'المشرف المسؤول', editing.supervisor) : school.supervisor || <span className="muted">غير محدد</span>}</td>
-        <td>{activeEdit ? editInput('region', 'المنطقة', editing.region) : school.region || '—'}</td>
         <td>{activeEdit ? editInput('school_type', 'نوع المدرسة', editing.school_type) : school.school_type || '—'}</td>
         <td>{activeEdit ? editInput('building_type', 'نوع المبنى', editing.building_type) : school.building_type || '—'}</td>
         <td>{activeEdit ? editInput('occupancy_size', 'حجم الإشغال', editing.occupancy_size) : school.occupancy_size || '—'}</td>
@@ -935,9 +935,68 @@ function Schools({ csrf, session, notify }) {
           ? <><button className="btn btn-small btn-primary" onClick={updateSchool} disabled={busy}><Check size={14} />حفظ</button><button className="btn btn-small btn-outline" onClick={() => setEditing(null)} disabled={busy}>إلغاء</button></>
           : <><button className="btn btn-small btn-outline" onClick={() => setEditing({ originalNumber: school.school_number, school_number: school.school_number, name: school.name, supervisor: school.supervisor || '', region: school.region || '', school_type: school.school_type || '', building_type: school.building_type || '', occupancy_size: school.occupancy_size || '' })} disabled={busy}>تعديل</button><button className="icon-btn danger-icon" title="حذف المدرسة" aria-label={`حذف ${school.name}`} onClick={() => deleteSchool(school)} disabled={busy}><X size={15} /></button></>}</div></td>}
       </tr>;
-    }) : <tr><td colSpan={canEdit ? '9' : '8'}><EmptyState text="لا توجد مدارس بعد. استورد ملف CSV يحتوي على رقم المدرسة واسمها." /></td></tr>}</tbody></table></div></section>
+    }) : <tr><td colSpan={canEdit ? '8' : '7'}><EmptyState text="لا توجد مدارس بعد. استورد ملف CSV يحتوي على رقم المدرسة واسمها." /></td></tr>}</tbody></table></div></section>
     <section className="panel sync-panel"><div className="sync-icon"><FileSpreadsheet size={20} /></div><div className="sync-copy"><strong>مزامنة من شيت أونلاين</strong><span>تطابق المزامنة رقم المدرسة، وتحدّث الأرقام المعدّلة عند تطابق اسم فريد. المدارس المضافة يدويًا تبقى في الدليل.</span></div>{session.role === 'admin' && <button className="btn btn-outline" onClick={sync} disabled={busy}><Activity size={16} />{busy ? 'جارٍ المزامنة…' : 'مزامنة الآن'}</button>}</section>
+    {selectedSchool && <SchoolDetailsModal schoolNumber={selectedSchool} onClose={() => setSelectedSchool(null)} notify={notify} />}
   </>;
+}
+function schoolBuildingCount(school) {
+  const size = `${school.occupancy_size || ''} ${school.building_type || ''}`;
+  if (/كبير|large/i.test(size)) return 3;
+  if (/متوسط|medium/i.test(size)) return 2;
+  return 1;
+}
+function SchoolVector({ count }) {
+  return <div className="school-vector" aria-hidden="true">{Array.from({ length: count }, (_, index) => <svg key={index} viewBox="0 0 96 88" role="presentation">
+    <path d="M12 37 48 10l36 27v43H12z" fill="#e8f5f2" stroke="#268c83" strokeWidth="3" strokeLinejoin="round" />
+    <path d="M7 38 48 7l41 31" fill="none" stroke="#268c83" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M39 80V57a9 9 0 0 1 18 0v23" fill="#fff" stroke="#268c83" strokeWidth="3" />
+    <path d="M21 47h10v10H21zm44 0h10v10H65z" fill="#9bd7cb" stroke="#268c83" strokeWidth="2" />
+    <path d="M44 21h8v11h-8z" fill="#f3c775" />
+  </svg>)}</div>;
+}
+function SchoolDetailsModal({ schoolNumber, onClose, notify }) {
+  const [school, setSchool] = useState(null);
+  const [busy, setBusy] = useState(true);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let active = true;
+    request(`/api/schools/${encodeURIComponent(schoolNumber)}`)
+      .then(({ item }) => { if (active) setSchool(item); })
+      .catch((requestError) => { if (active) { setError(requestError.message); notify(requestError.message); } })
+      .finally(() => { if (active) setBusy(false); });
+    return () => { active = false; };
+  }, [schoolNumber, notify]);
+  useEffect(() => {
+    const closeOnEscape = (event) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [onClose]);
+  const coordinates = (school?.source_data || []).reduce((result, field) => {
+    if (field.label === 'خط العرض') result.latitude = field.value;
+    if (field.label === 'خط الطول') result.longitude = field.value;
+    return result;
+  }, {});
+  const latitude = Number(coordinates.latitude);
+  const longitude = Number(coordinates.longitude);
+  const hasCoordinates = Boolean(coordinates.latitude && coordinates.longitude) &&
+    Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 &&
+    Number.isFinite(longitude) && longitude >= -180 && longitude <= 180;
+  const mapUrl = hasCoordinates ? `https://www.google.com/maps?q=${latitude},${longitude}` : '';
+  return <div className="ticket-detail-backdrop school-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section className="ticket-detail-modal school-detail-modal" role="dialog" aria-modal="true" aria-labelledby="school-detail-title">
+      <div className="ticket-detail-heading"><div><span className="eyebrow">بيانات المدرسة</span><h2 id="school-detail-title">{school?.school_number || schoolNumber}</h2></div><button className="icon-btn" onClick={onClose} aria-label="إغلاق تفاصيل المدرسة"><X size={19} /></button></div>
+      {busy ? <PageLoader /> : error ? <EmptyState text={error} /> : school && <>
+        <header className="school-detail-hero">
+          <SchoolVector count={schoolBuildingCount(school)} />
+          <div className="school-detail-intro"><h3>{school.name}</h3><p>{school.region || 'المنطقة غير مسجلة'}</p>{mapUrl && <a href={mapUrl} target="_blank" rel="noreferrer"><Building2 size={15} />عرض موقع المدرسة على خرائط Google</a>}</div>
+        </header>
+        {school.source_data?.length
+          ? <div className="school-detail-table-wrap"><table className="school-details-table"><tbody>{school.source_data.map((field, index) => <tr key={`${field.label}-${index}`}><th scope="row">{field.label || `بيان ${index + 1}`}</th><td>{field.value || '—'}</td></tr>)}</tbody></table></div>
+          : <p className="school-detail-empty">بيانات أعمدة الشيت غير محفوظة لهذه المدرسة بعد. نفّذ مزامنة المدارس لعرض كامل التفاصيل.</p>}
+      </>}
+    </section>
+  </div>;
 }
 function AccountPage({ session, csrf, notify, onUpdated }) {
   const [form, setForm] = useState({ username: session.username, displayName: session.displayName, currentPassword: '', newPassword: '' });

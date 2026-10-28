@@ -4,6 +4,27 @@ const { normalizeSchoolNumber } = require('./importer');
 const DEFAULT_SCHOOLS_URL = 'https://docs.google.com/spreadsheets/d/1RQo06DqRHv24M8bh1CmJbOl4c_GmoLPXKkHK_sVIoI8/edit?usp=sharing';
 const MAX_SHEET_BYTES = 8_000_000;
 
+function displayHeader(header, index, headers) {
+  const normalized = String(header).normalize('NFKC').trim().toLowerCase();
+  const labels = {
+    id: 'معرّف السجل',
+    maintenance: 'الصيانة',
+    stage: 'المرحلة',
+    gender: 'النوع',
+    occupancy_size: 'حجم المبنى',
+    study_time: 'الفترة الدراسية'
+  };
+  if (labels[normalized]) return labels[normalized];
+  if (normalized === 'رقم الجوال') {
+    const role = headers[index - 1] || headers[index + 1] || '';
+    const suffix = /المسئول|المسؤول/.test(role) ? 'للمسؤول'
+      : /مشرف الشركة/.test(role) ? 'لمشرف الشركة'
+        : /مهندس الشركة/.test(role) ? 'لمهندس الشركة' : '';
+    return suffix ? `رقم الجوال ${suffix}` : 'رقم الجوال';
+  }
+  return String(header).trim() || `بيان ${index + 1}`;
+}
+
 function parseSchoolCsv(buffer) {
   let records;
   try {
@@ -23,6 +44,8 @@ function parseSchoolCsv(buffer) {
   const schoolTypeColumn = find(['نوع المدرسة', 'نوع الموقع', 'school type', 'site type', 'gender'], 19);
   const buildingTypeColumn = find(['نوع المبنى', 'نوع المبني', 'building type', 'building_type'], 15);
   const occupancySizeColumn = find(['occupancy_size', 'occupancy size', 'حجم الإشغال', 'حجم الاشغال'], 21);
+  const latitudeColumn = find(['خط العرض', 'latitude', 'lat'], 6);
+  const longitudeColumn = find(['خط الطول', 'longitude', 'lon', 'lng'], 7);
   if (numberColumn === undefined || nameColumn === undefined) throw new Error('يلزم وجود عمود رقم المدرسة وعمود اسم المدرسة.');
 
   const uniqueSchools = new Map();
@@ -30,6 +53,11 @@ function parseSchoolCsv(buffer) {
     const number = normalizeSchoolNumber(record[numberColumn]);
     const name = String(record[nameColumn] || '').trim().slice(0, 250);
     if (!number || !name) continue;
+    const sourceData = (records[0] || []).map((header, index) => ({
+      index,
+      label: displayHeader(header, index, records[0]),
+      value: String(record[index] || '').trim()
+    }));
     uniqueSchools.set(number, {
       number,
       name,
@@ -37,7 +65,10 @@ function parseSchoolCsv(buffer) {
       region: regionColumn === undefined ? '' : String(record[regionColumn] || '').trim().slice(0, 250),
       schoolType: schoolTypeColumn === undefined ? '' : String(record[schoolTypeColumn] || '').trim().slice(0, 100),
       buildingType: buildingTypeColumn === undefined ? '' : String(record[buildingTypeColumn] || '').trim().slice(0, 100),
-      occupancySize: occupancySizeColumn === undefined ? '' : String(record[occupancySizeColumn] || '').trim().slice(0, 100)
+      occupancySize: occupancySizeColumn === undefined ? '' : String(record[occupancySizeColumn] || '').trim().slice(0, 100),
+      latitude: latitudeColumn === undefined ? '' : String(record[latitudeColumn] || '').trim(),
+      longitude: longitudeColumn === undefined ? '' : String(record[longitudeColumn] || '').trim(),
+      sourceData
     });
   }
   const schools = [...uniqueSchools.values()];

@@ -613,12 +613,18 @@ app.get('/api/schools', requireRole(...roles), (req, res) => {
   const like = `%${q}%`;
   const normalizedNumber = schoolNumberKey(normalizeSchoolNumber(q));
   const numberLike = normalizedNumber ? `%${normalizedNumber}%` : like;
-  const items = db.prepare(`SELECT * FROM schools
+  const items = db.prepare(`SELECT school_number, name, supervisor, region, school_type, building_type, occupancy_size, updated_at FROM schools
     WHERE ? = '' OR school_number LIKE ? OR (? <> '' AND school_number LIKE ?)
       OR name LIKE ? OR supervisor LIKE ? ORDER BY name LIMIT 500`)
     .all(q, like, normalizedNumber, numberLike, like, like);
   const total = db.prepare('SELECT COUNT(*) AS count FROM schools').get().count;
   res.json({ items, total });
+});
+app.get('/api/schools/:schoolNumber', requireRole(...roles), (req, res) => {
+  const schoolNumber = normalizeSchoolNumber(req.params.schoolNumber);
+  const school = db.prepare('SELECT * FROM schools WHERE school_number = ?').get(schoolNumber);
+  if (!school) return res.status(404).json({ error: 'المدرسة غير موجودة في دليل المدارس.' });
+  res.json({ item: { ...school, source_data: JSON.parse(school.source_data || '[]') } });
 });
 app.post('/api/schools', requireRole('admin', 'receiver'), (req, res) => {
   const parsed = z.object({
@@ -673,7 +679,8 @@ app.delete('/api/schools/:schoolNumber', requireRole('admin', 'receiver'), (req,
 });
 app.get('/api/schools/:schoolNumber/report', requireRole(...roles), (req, res) => {
   const schoolNumber = normalizeSchoolNumber(req.params.schoolNumber);
-  const school = db.prepare('SELECT * FROM schools WHERE school_number = ?').get(schoolNumber);
+  const school = db.prepare(`SELECT school_number, name, supervisor, region, school_type, building_type, occupancy_size, updated_at
+    FROM schools WHERE school_number = ?`).get(schoolNumber);
   if (!school) return res.status(404).json({ error: 'المدرسة غير موجودة في دليل المدارس.' });
   const tickets = db.prepare(`SELECT * FROM tickets
     WHERE matched_school_number = ? AND deleted_at IS NULL
@@ -874,12 +881,14 @@ function storeSchools(rows, userId = null, source = 'sync') {
     currentNumbers.add(school.number);
   }
 
-  const save = db.prepare(`INSERT INTO schools (school_number, name, supervisor, region, school_type, building_type, occupancy_size, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  const save = db.prepare(`INSERT INTO schools (school_number, name, supervisor, region, school_type, building_type, occupancy_size, source_data, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     ON CONFLICT(school_number) DO UPDATE SET name=excluded.name, supervisor=excluded.supervisor, region=excluded.region,
       school_type=COALESCE(NULLIF(excluded.school_type, ''), schools.school_type),
       building_type=COALESCE(NULLIF(excluded.building_type, ''), schools.building_type),
-      occupancy_size=COALESCE(NULLIF(excluded.occupancy_size, ''), schools.occupancy_size), updated_at=CURRENT_TIMESTAMP`);
+      occupancy_size=COALESCE(NULLIF(excluded.occupancy_size, ''), schools.occupancy_size),
+      source_data=CASE WHEN excluded.source_data <> '[]' THEN excluded.source_data ELSE schools.source_data END,
+      updated_at=CURRENT_TIMESTAMP`);
   db.transaction((items) => {
     for (const { previous, school } of renumberedSchools) {
       const after = {
@@ -903,6 +912,11 @@ function storeSchools(rows, userId = null, source = 'sync') {
     }
     items.forEach((school) => {
       const before = db.prepare('SELECT * FROM schools WHERE school_number = ?').get(school.number);
+      const previousSourceData = JSON.parse(before?.source_data || '[]');
+      const incomingSourceData = school.sourceData || [];
+      const sourceData = source === 'sync' || incomingSourceData.length >= previousSourceData.length
+        ? incomingSourceData
+        : previousSourceData;
       const after = {
         school_number: school.number,
         name: school.name,
@@ -914,7 +928,8 @@ function storeSchools(rows, userId = null, source = 'sync') {
       };
       save.run(
         school.number, school.name, school.supervisor || '', school.region || '',
-        school.schoolType || '', school.buildingType || '', school.occupancySize || ''
+        school.schoolType || '', school.buildingType || '', school.occupancySize || '',
+        JSON.stringify(sourceData)
       );
       recordSchoolChange(school.number, userId, source, before, after);
     });
