@@ -87,7 +87,11 @@ function createVercelApiProxy() {
 
       res.statusCode = upstream.status;
       upstream.headers.forEach((value, name) => {
-        if (name !== 'set-cookie' && !hopByHopHeaders.has(name.toLowerCase())) res.setHeader(name, value);
+        if (
+          name !== 'set-cookie' &&
+          name !== 'content-encoding' &&
+          !hopByHopHeaders.has(name.toLowerCase())
+        ) res.setHeader(name, value);
       });
       const setCookies = upstream.headers.getSetCookie?.() || [];
       if (setCookies.length) res.setHeader('set-cookie', setCookies);

@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const { brotliCompressSync } = require('node:zlib');
 const { createVercelApiProxy } = require('./vercel-proxy');
 
 function listen(server) {
@@ -24,15 +25,19 @@ test('Vercel API proxy forwards API requests, cookies, and streamed request bodi
   const backend = http.createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
-    res.setHeader('content-type', 'application/json');
-    res.setHeader('set-cookie', ['rifad.sid=test-session; HttpOnly; SameSite=Strict']);
-    res.end(JSON.stringify({
+    const body = JSON.stringify({
       method: req.method,
       url: req.url,
       origin: req.headers.origin,
       csrf: req.headers['x-csrf-token'],
       body: Buffer.concat(chunks).toString()
-    }));
+    });
+    const compressedBody = brotliCompressSync(body);
+    res.setHeader('content-type', 'application/json');
+    res.setHeader('content-encoding', 'br');
+    res.setHeader('content-length', compressedBody.length);
+    res.setHeader('set-cookie', ['rifad.sid=test-session; HttpOnly; SameSite=Strict']);
+    res.end(compressedBody);
   });
   const backendAddress = await listen(backend);
   process.env.RIFAD_API_ORIGIN = `http://127.0.0.1:${backendAddress.port}`;
@@ -61,6 +66,7 @@ test('Vercel API proxy forwards API requests, cookies, and streamed request bodi
 
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.equal(response.headers.get('content-encoding'), null);
   assert.match(response.headers.get('set-cookie'), /rifad\.sid=test-session/);
   assert.deepEqual(await response.json(), {
     method: 'POST',
