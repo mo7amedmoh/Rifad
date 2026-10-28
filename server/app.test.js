@@ -308,7 +308,8 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
   assert.equal(accountData.user.displayName, 'مدير محدث');
   cookie = accountResponse.headers.get('set-cookie').split(';')[0];
   const updatedSessionResponse = await fetch(`${base}/api/session`, { headers: { Cookie: cookie } });
-  assert.equal((await updatedSessionResponse.json()).user.displayName, 'مدير محدث');
+  const updatedSessionData = await updatedSessionResponse.json();
+  assert.equal(updatedSessionData.user.displayName, 'مدير محدث');
   const loginSessionResponse = await fetch(`${base}/api/session`);
   const loginSession = await loginSessionResponse.json();
   const loginCookie = loginSessionResponse.headers.get('set-cookie').split(';')[0];
@@ -318,4 +319,88 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
     body: JSON.stringify({ username: 'admin-renamed', password: 'a-new-strong-password-456' })
   });
   assert.equal(updatedLoginResponse.status, 200);
+
+  const nativeFetch = global.fetch;
+  const schoolSheetCsv = [
+    'رقم المدرسة,اسم المدرسة,المشرف المسؤول,المنطقة,نوع المدرسة,نوع المبنى,حجم الإشغال',
+    '777888,مدرسة تجريبية مصححة,مشرف الشيت,الرياض,حكومية,مبنى تعليمي,350'
+  ].join('\n');
+  global.fetch = (input, options) => String(input).startsWith(base)
+    ? nativeFetch(input, options)
+    : Promise.resolve(new Response(schoolSheetCsv, { status: 200 }));
+  try {
+    const syncResponse = await nativeFetch(`${base}/api/schools/sync`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'X-CSRF-Token': updatedSessionData.csrfToken, 'Content-Type': 'application/json' },
+      body: '{}'
+    });
+    assert.equal(syncResponse.status, 200);
+    const syncResult = await syncResponse.json();
+    assert.equal(syncResult.imported, 1);
+    assert.equal(syncResult.renumbered, 1);
+    const renumberedSchool = db.prepare('SELECT * FROM schools WHERE school_number = ?').get('777888');
+    assert.equal(renumberedSchool.name, 'مدرسة تجريبية مصححة');
+    assert.equal(renumberedSchool.supervisor, 'مشرف الشيت');
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM schools').get().count, 1);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM tickets WHERE matched_school_number = ? AND school_match_override = 1').get('777888').count, 4);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM school_change_log WHERE school_number = ?').get('777888').count > 0, true);
+
+    const addSchoolResponse = await nativeFetch(`${base}/api/schools`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'X-CSRF-Token': updatedSessionData.csrfToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ schoolNumber: '888999', name: 'مدرسة تجريبية مصححة', region: 'الرياض' })
+    });
+    assert.equal(addSchoolResponse.status, 201);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM schools').get().count, 2);
+
+    global.fetch = (input, options) => String(input).startsWith(base)
+      ? nativeFetch(input, options)
+      : Promise.resolve(new Response([
+        'رقم المدرسة,اسم المدرسة,المشرف المسؤول',
+        '999000,مدرسة تجريبية مصححة,مشرف الشيت'
+      ].join('\n'), { status: 200 }));
+    const ambiguousSyncResponse = await nativeFetch(`${base}/api/schools/sync`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'X-CSRF-Token': updatedSessionData.csrfToken, 'Content-Type': 'application/json' },
+      body: '{}'
+    });
+    assert.equal(ambiguousSyncResponse.status, 200);
+    assert.equal((await ambiguousSyncResponse.json()).renumbered, 0);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM schools').get().count, 3);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM schools WHERE school_number IN (?, ?)').get('777888', '888999').count, 2);
+
+    const duplicateSchoolResponse = await nativeFetch(`${base}/api/schools`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'X-CSRF-Token': updatedSessionData.csrfToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ schoolNumber: '888999', name: 'نسخة مكررة' })
+    });
+    assert.equal(duplicateSchoolResponse.status, 409);
+
+    const deleteTargetResponse = await nativeFetch(`${base}/api/schools`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'X-CSRF-Token': updatedSessionData.csrfToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ schoolNumber: '111222', name: 'مدرسة مضافة للاختبار' })
+    });
+    assert.equal(deleteTargetResponse.status, 201);
+
+    const deleteSchoolResponse = await nativeFetch(`${base}/api/schools/111222`, {
+      method: 'DELETE',
+      headers: { Cookie: cookie, 'X-CSRF-Token': updatedSessionData.csrfToken }
+    });
+    assert.equal(deleteSchoolResponse.status, 200);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM schools WHERE school_number = ?').get('111222').count, 0);
+
+    const ticketCountBeforeDeleteAll = db.prepare('SELECT COUNT(*) AS count FROM tickets').get().count;
+    const deleteAllResponse = await nativeFetch(`${base}/api/schools`, {
+      method: 'DELETE',
+      headers: { Cookie: cookie, 'X-CSRF-Token': updatedSessionData.csrfToken }
+    });
+    assert.equal(deleteAllResponse.status, 200);
+    assert.equal((await deleteAllResponse.json()).deleted, 3);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM schools').get().count, 0);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM tickets').get().count, ticketCountBeforeDeleteAll);
+    assert.ok(db.prepare('SELECT COUNT(*) AS count FROM school_change_log').get().count > 0);
+  } finally {
+    global.fetch = nativeFetch;
+  }
 });

@@ -817,13 +817,16 @@ function Schools({ csrf, session, notify }) {
   const [query, setQuery] = useState('');
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
-  const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const [newSchool, setNewSchool] = useState({
+    schoolNumber: '', name: '', supervisor: '', region: '', schoolType: '', buildingType: '', occupancySize: ''
+  });
   const fileRef = useRef(null);
   const canEdit = ['admin', 'receiver'].includes(session.role);
-  const load = useCallback(async () => {
-    try { const data = await request(`/api/schools?q=${encodeURIComponent(query)}`); setItems(data.items); setTotal(data.total); }
+  const load = useCallback(async (search = query) => {
+    try { const data = await request(`/api/schools?q=${encodeURIComponent(search)}`); setItems(data.items); setTotal(data.total); }
     catch (error) { notify(error.message); }
   }, [notify, query]);
   useEffect(() => { load(); }, [load]);
@@ -836,8 +839,44 @@ function Schools({ csrf, session, notify }) {
   };
   const sync = async () => {
     setBusy(true);
-    try { const result = await request('/api/schools/sync', { method: 'POST', csrf, body: '{}' }); notify(result.message); await load(); }
+    try { const result = await request('/api/schools/sync', { method: 'POST', csrf, body: '{}' }); notify(result.message); setQuery(''); await load(''); }
     catch (error) { notify(error.message); }
+    finally { setBusy(false); }
+  };
+  const addSchool = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      await request('/api/schools', { method: 'POST', csrf, body: JSON.stringify(newSchool) });
+      notify('تمت إضافة المدرسة.');
+      setAdding(false);
+      setNewSchool({ schoolNumber: '', name: '', supervisor: '', region: '', schoolType: '', buildingType: '', occupancySize: '' });
+      setQuery('');
+      await load('');
+    } catch (error) { notify(error.message); }
+    finally { setBusy(false); }
+  };
+  const deleteSchool = async (school) => {
+    if (!window.confirm(`حذف «${school.name}» من دليل المدارس؟ ستبقى البلاغات محفوظة، لكنها لن تدخل في التحليلات حتى إعادة ربطها.`)) return;
+    setBusy(true);
+    try {
+      await request(`/api/schools/${encodeURIComponent(school.school_number)}`, { method: 'DELETE', csrf });
+      notify('حُذفت المدرسة من الدليل مع الاحتفاظ ببلاغاتها.');
+      await load();
+    } catch (error) { notify(error.message); }
+    finally { setBusy(false); }
+  };
+  const deleteAllSchools = async () => {
+    if (!total) return;
+    if (!window.confirm(`حذف جميع المدارس (${fmt.format(total)}) من الدليل؟ ستبقى البلاغات وسجلات التغييرات محفوظة، لكنها لن تدخل في التحليلات حتى مزامنة المدارس مجددًا.`)) return;
+    setBusy(true);
+    try {
+      const result = await request('/api/schools', { method: 'DELETE', csrf });
+      notify(result.message);
+      setEditing(null);
+      setQuery('');
+      await load('');
+    } catch (error) { notify(error.message); }
     finally { setBusy(false); }
   };
   const updateSchool = async () => {
@@ -869,9 +908,19 @@ function Schools({ csrf, session, notify }) {
     value={value}
     onChange={(event) => setEditing({ ...editing, [field]: event.target.value })}
   />;
-  return <><PageHeading eyebrow="دليل المدارس" title="قاعدة بيانات المدارس" description="اربط أرقام المدارس بالمشرف والمنطقة لتحسين دقة التحليلات." action={canEdit && <><input ref={fileRef} type="file" accept=".csv,text/csv" className="visually-hidden" onChange={(e) => upload(e.target.files?.[0])} /><button className="btn btn-primary" onClick={() => fileRef.current?.click()} disabled={busy}><CloudUpload size={17} />استيراد قائمة المدارس</button></>} />
+  return <><PageHeading eyebrow="دليل المدارس" title="قاعدة بيانات المدارس" description="اربط أرقام المدارس بالمشرف والمنطقة لتحسين دقة التحليلات." action={canEdit && <div className="heading-actions"><input ref={fileRef} type="file" accept=".csv,text/csv" className="visually-hidden" onChange={(e) => upload(e.target.files?.[0])} />{session.role === 'admin' && <button className="btn btn-outline" onClick={deleteAllSchools} disabled={busy || total === 0}><X size={15} />حذف جميع المدارس</button>}<button className="btn btn-outline" onClick={() => { setAdding(!adding); setEditing(null); }} disabled={busy}><Plus size={16} />إضافة مدرسة</button><button className="btn btn-primary" onClick={() => fileRef.current?.click()} disabled={busy}><CloudUpload size={17} />استيراد قائمة المدارس</button></div>} />
     <div className="school-summary"><div className="school-summary-icon"><Building2 size={22} /></div><div><span>مدرسة في قاعدة البيانات</span><strong>{fmt.format(total)}</strong></div><div className="school-summary-note"><CheckCircle2 size={15} />توحيد رقم المدرسة يربط البلاغ بالمشرف تلقائيًا</div></div>
-    <section className="panel school-panel"><div className="panel-heading"><div><h2>دليل المدارس والمشرفين</h2><p>تتم إزالة البادئة S- والمسافات من الرقم الوزاري عند الاستيراد.</p></div><div className="search-field compact-search"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث باسم المدرسة أو الرقم…" /></div></div><div className="table-wrap"><table className="tickets-table schools-table"><thead><tr><th>الرقم الوزاري</th><th>اسم المدرسة</th><th>المشرف المسؤول</th><th>المنطقة</th><th>النوع (T)</th><th>نوع المبنى (P)</th><th>الإشغال (V)</th><th>آخر تحديث</th>{canEdit && <th>إجراءات</th>}</tr></thead><tbody>{items.length ? items.map((school) => {
+    <section className="panel school-panel"><div className="panel-heading"><div><h2>دليل المدارس والمشرفين</h2><p>تتم إزالة البادئة S- والمسافات من الرقم الوزاري عند الاستيراد. تعيد المزامنة مطابقة الاسم الفريد لتحديث رقم المدرسة دون تكرارها.</p></div><div className="search-field compact-search"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث باسم المدرسة أو الرقم…" /></div></div>
+    {adding && <form className="school-create-form" onSubmit={addSchool}>{[
+      ['schoolNumber', 'الرقم الوزاري', true],
+      ['name', 'اسم المدرسة', true],
+      ['supervisor', 'المشرف المسؤول'],
+      ['region', 'المنطقة'],
+      ['schoolType', 'نوع المدرسة'],
+      ['buildingType', 'نوع المبنى'],
+      ['occupancySize', 'حجم الإشغال']
+    ].map(([field, label, required]) => <label key={field}>{label}<input required={required} value={newSchool[field]} onChange={(event) => setNewSchool({ ...newSchool, [field]: event.target.value })} /></label>)}<div className="school-create-actions"><button className="btn btn-primary" disabled={busy}><Check size={15} />حفظ المدرسة</button><button type="button" className="btn btn-outline" onClick={() => setAdding(false)} disabled={busy}>إلغاء</button></div></form>}
+    <div className="table-wrap"><table className="tickets-table schools-table"><thead><tr><th>الرقم الوزاري</th><th>اسم المدرسة</th><th>المشرف المسؤول</th><th>المنطقة</th><th>النوع (T)</th><th>نوع المبنى (P)</th><th>الإشغال (V)</th><th>آخر تحديث</th>{canEdit && <th>إجراءات</th>}</tr></thead><tbody>{items.length ? items.map((school) => {
       const activeEdit = editing?.originalNumber === school.school_number;
       return <tr key={school.school_number}>
         <td>{activeEdit ? editInput('school_number', 'الرقم الوزاري', editing.school_number, true) : <span className="school-number">{school.school_number}</span>}</td>
@@ -884,10 +933,10 @@ function Schools({ csrf, session, notify }) {
         <td>{new Intl.DateTimeFormat('ar-SA', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(school.updated_at))}</td>
         {canEdit && <td><div className="school-actions">{activeEdit
           ? <><button className="btn btn-small btn-primary" onClick={updateSchool} disabled={busy}><Check size={14} />حفظ</button><button className="btn btn-small btn-outline" onClick={() => setEditing(null)} disabled={busy}>إلغاء</button></>
-          : <button className="btn btn-small btn-outline" onClick={() => setEditing({ originalNumber: school.school_number, school_number: school.school_number, name: school.name, supervisor: school.supervisor || '', region: school.region || '', school_type: school.school_type || '', building_type: school.building_type || '', occupancy_size: school.occupancy_size || '' })}>تعديل</button>}</div></td>}
+          : <><button className="btn btn-small btn-outline" onClick={() => setEditing({ originalNumber: school.school_number, school_number: school.school_number, name: school.name, supervisor: school.supervisor || '', region: school.region || '', school_type: school.school_type || '', building_type: school.building_type || '', occupancy_size: school.occupancy_size || '' })} disabled={busy}>تعديل</button><button className="icon-btn danger-icon" title="حذف المدرسة" aria-label={`حذف ${school.name}`} onClick={() => deleteSchool(school)} disabled={busy}><X size={15} /></button></>}</div></td>}
       </tr>;
     }) : <tr><td colSpan={canEdit ? '9' : '8'}><EmptyState text="لا توجد مدارس بعد. استورد ملف CSV يحتوي على رقم المدرسة واسمها." /></td></tr>}</tbody></table></div></section>
-    <section className="panel sync-panel"><div className="sync-icon"><FileSpreadsheet size={20} /></div><div className="sync-copy"><strong>مزامنة من شيت أونلاين</strong><span>يمكن للمسؤول إضافة رابط CSV من إعدادات النظام لمزامنة بيانات المدارس يدويًا عند الحاجة.</span></div>{session.role === 'admin' && <button className="btn btn-outline" onClick={sync} disabled={busy}><Activity size={16} />{busy ? 'جارٍ المزامنة…' : 'مزامنة الآن'}</button>}</section>
+    <section className="panel sync-panel"><div className="sync-icon"><FileSpreadsheet size={20} /></div><div className="sync-copy"><strong>مزامنة من شيت أونلاين</strong><span>تطابق المزامنة رقم المدرسة، وتحدّث الأرقام المعدّلة عند تطابق اسم فريد. المدارس المضافة يدويًا تبقى في الدليل.</span></div>{session.role === 'admin' && <button className="btn btn-outline" onClick={sync} disabled={busy}><Activity size={16} />{busy ? 'جارٍ المزامنة…' : 'مزامنة الآن'}</button>}</section>
   </>;
 }
 function AccountPage({ session, csrf, notify, onUpdated }) {

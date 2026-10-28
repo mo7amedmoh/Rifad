@@ -618,6 +618,57 @@ app.get('/api/schools', requireRole(...roles), (req, res) => {
   const total = db.prepare('SELECT COUNT(*) AS count FROM schools').get().count;
   res.json({ items, total });
 });
+app.post('/api/schools', requireRole('admin', 'receiver'), (req, res) => {
+  const parsed = z.object({
+    schoolNumber: z.string().trim().min(1).max(50),
+    name: z.string().trim().min(1).max(250),
+    supervisor: z.string().trim().max(150).optional().default(''),
+    region: z.string().trim().max(250).optional().default(''),
+    schoolType: z.string().trim().max(100).optional().default(''),
+    buildingType: z.string().trim().max(100).optional().default(''),
+    occupancySize: z.string().trim().max(100).optional().default('')
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'أدخل رقم المدرسة واسمها وتحقق من بقية البيانات.' });
+
+  const number = normalizeSchoolNumber(parsed.data.schoolNumber);
+  if (!number) return res.status(400).json({ error: 'رقم المدرسة غير صالح.' });
+  if (db.prepare('SELECT 1 FROM schools WHERE school_number = ?').get(number)) {
+    return res.status(409).json({ error: 'رقم المدرسة مسجل مسبقًا.' });
+  }
+  try {
+    storeSchools([{
+      number,
+      name: parsed.data.name,
+      supervisor: parsed.data.supervisor,
+      region: parsed.data.region,
+      schoolType: parsed.data.schoolType,
+      buildingType: parsed.data.buildingType,
+      occupancySize: parsed.data.occupancySize
+    }], req.user.id, 'manual');
+  } catch (error) {
+    if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      return res.status(409).json({ error: 'رقم المدرسة مسجل مسبقًا.' });
+    }
+    throw error;
+  }
+  audit(req.user.id, 'create', 'school', number);
+  res.status(201).json({ item: db.prepare('SELECT * FROM schools WHERE school_number = ?').get(number) });
+});
+app.delete('/api/schools', requireRole('admin'), (req, res) => {
+  const count = db.prepare('SELECT COUNT(*) AS count FROM schools').get().count;
+  db.transaction(() => {
+    db.prepare('DELETE FROM schools').run();
+    audit(req.user.id, 'delete-all', 'schools', count);
+  })();
+  res.json({ deleted: count, message: `تم حذف ${count} مدرسة من الدليل. لم تُحذف البلاغات أو سجلات التغييرات.` });
+});
+app.delete('/api/schools/:schoolNumber', requireRole('admin', 'receiver'), (req, res) => {
+  const schoolNumber = normalizeSchoolNumber(req.params.schoolNumber);
+  const result = db.prepare('DELETE FROM schools WHERE school_number = ?').run(schoolNumber);
+  if (!result.changes) return res.status(404).json({ error: 'المدرسة غير موجودة.' });
+  audit(req.user.id, 'delete', 'school', schoolNumber);
+  res.json({ ok: true, message: 'حُذفت المدرسة من الدليل مع الاحتفاظ بالبلاغات وسجل التغييرات.' });
+});
 app.get('/api/schools/:schoolNumber/report', requireRole(...roles), (req, res) => {
   const schoolNumber = normalizeSchoolNumber(req.params.schoolNumber);
   const school = db.prepare('SELECT * FROM schools WHERE school_number = ?').get(schoolNumber);
@@ -796,30 +847,78 @@ app.post('/api/schools/import', requireRole('admin', 'receiver'), (req, res) => 
   }
 });
 function storeSchools(rows, userId = null, source = 'sync') {
+  const currentSchools = source === 'manual' ? [] : db.prepare('SELECT * FROM schools').all();
+  const currentByName = new Map();
+  const incomingByName = new Map();
+  const addToNameIndex = (index, key, item) => {
+    if (!key) return;
+    const matches = index.get(key) || [];
+    matches.push(item);
+    index.set(key, matches);
+  };
+  for (const school of currentSchools) addToNameIndex(currentByName, normalizeSchoolName(school.name), school);
+  for (const school of rows) addToNameIndex(incomingByName, normalizeSchoolName(school.name), school);
+  const currentNumbers = new Set(currentSchools.map((school) => school.school_number));
+  const renumberedSchools = [];
+  for (const school of rows) {
+    if (currentNumbers.has(school.number)) continue;
+    const nameKey = normalizeSchoolName(school.name);
+    const previousMatches = currentByName.get(nameKey) || [];
+    const incomingMatches = incomingByName.get(nameKey) || [];
+    if (previousMatches.length !== 1 || incomingMatches.length !== 1) continue;
+    const previous = previousMatches[0];
+    if (currentNumbers.has(school.number)) continue;
+    renumberedSchools.push({ previous, school });
+    currentNumbers.add(school.number);
+  }
+
   const save = db.prepare(`INSERT INTO schools (school_number, name, supervisor, region, school_type, building_type, occupancy_size, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     ON CONFLICT(school_number) DO UPDATE SET name=excluded.name, supervisor=excluded.supervisor, region=excluded.region,
       school_type=COALESCE(NULLIF(excluded.school_type, ''), schools.school_type),
       building_type=COALESCE(NULLIF(excluded.building_type, ''), schools.building_type),
       occupancy_size=COALESCE(NULLIF(excluded.occupancy_size, ''), schools.occupancy_size), updated_at=CURRENT_TIMESTAMP`);
-  db.transaction((items) => items.forEach((school) => {
-    const before = db.prepare('SELECT * FROM schools WHERE school_number = ?').get(school.number);
-    const after = {
-      school_number: school.number,
-      name: school.name,
-      supervisor: school.supervisor || '',
-      region: school.region || '',
-      school_type: school.schoolType || before?.school_type || '',
-      building_type: school.buildingType || before?.building_type || '',
-      occupancy_size: school.occupancySize || before?.occupancy_size || ''
-    };
-    save.run(
-      school.number, school.name, school.supervisor || '', school.region || '',
-      school.schoolType || '', school.buildingType || '', school.occupancySize || ''
-    );
-    recordSchoolChange(school.number, userId, source, before, after);
-  }))(rows);
+  db.transaction((items) => {
+    for (const { previous, school } of renumberedSchools) {
+      const after = {
+        school_number: school.number,
+        name: school.name,
+        supervisor: school.supervisor || '',
+        region: school.region || '',
+        school_type: school.schoolType || previous.school_type || '',
+        building_type: school.buildingType || previous.building_type || '',
+        occupancy_size: school.occupancySize || previous.occupancy_size || ''
+      };
+      recordSchoolChange(school.number, userId, source, previous, after);
+      db.prepare('UPDATE schools SET school_number = ? WHERE school_number = ?')
+        .run(school.number, previous.school_number);
+      db.prepare('UPDATE tickets SET matched_school_number = ? WHERE matched_school_number = ?')
+        .run(school.number, previous.school_number);
+      db.prepare('UPDATE tickets SET school_match_override = 1 WHERE matched_school_number = ?')
+        .run(school.number);
+      db.prepare('UPDATE school_change_log SET school_number = ? WHERE school_number = ?')
+        .run(school.number, previous.school_number);
+    }
+    items.forEach((school) => {
+      const before = db.prepare('SELECT * FROM schools WHERE school_number = ?').get(school.number);
+      const after = {
+        school_number: school.number,
+        name: school.name,
+        supervisor: school.supervisor || '',
+        region: school.region || '',
+        school_type: school.schoolType || before?.school_type || '',
+        building_type: school.buildingType || before?.building_type || '',
+        occupancy_size: school.occupancySize || before?.occupancy_size || ''
+      };
+      save.run(
+        school.number, school.name, school.supervisor || '', school.region || '',
+        school.schoolType || '', school.buildingType || '', school.occupancySize || ''
+      );
+      recordSchoolChange(school.number, userId, source, before, after);
+    });
+  })(rows);
   refreshTicketSchoolMatches();
+  return { renumbered: renumberedSchools.length };
 }
 async function syncSchoolData(urlValue = DEFAULT_SCHOOLS_URL, userId = null) {
   let csv;
@@ -829,15 +928,19 @@ async function syncSchoolData(urlValue = DEFAULT_SCHOOLS_URL, userId = null) {
     throw Object.assign(new Error('تعذر الاتصال بشيت المدارس. تحقق من صلاحية المشاركة واتصال الإنترنت.'), { status: 502 });
   }
   const rows = parseSchoolCsv(csv);
-  storeSchools(rows, userId, 'sync');
+  const result = storeSchools(rows, userId, 'sync');
   if (userId) audit(userId, 'sync', 'schools', rows.length);
-  return rows.length;
+  return { count: rows.length, renumbered: result.renumbered };
 }
 app.post('/api/schools/sync', requireRole('admin'), asyncRoute(async (req, res) => {
   const urlValue = db.prepare("SELECT value FROM app_settings WHERE key = 'schools_url'").get()?.value || DEFAULT_SCHOOLS_URL;
   try {
-    const count = await syncSchoolData(urlValue, req.user.id);
-    res.json({ imported: count, message: `تمت مزامنة ${count} مدرسة.` });
+    const result = await syncSchoolData(urlValue, req.user.id);
+    res.json({
+      imported: result.count,
+      renumbered: result.renumbered,
+      message: `تمت مزامنة ${result.count} مدرسة، وتحديث أرقام ${result.renumbered} مدرسة.`
+    });
   } catch (error) {
     console.error(`School synchronization failed: ${error.message}`);
     res.status(error.status || 502).json({ error: error.message });
@@ -923,7 +1026,7 @@ if (production && process.env.SERVE_CLIENT !== 'false') {
 if (require.main === module) {
   const schoolUrl = db.prepare("SELECT value FROM app_settings WHERE key = 'schools_url'").get()?.value || DEFAULT_SCHOOLS_URL;
   syncSchoolData(schoolUrl)
-    .then((count) => console.info(`School data synchronized: ${count} records.`))
+    .then(({ count }) => console.info(`School data synchronized: ${count} records.`))
     .catch((error) => console.error(`Automatic school synchronization failed: ${error.message}`))
     .finally(() => app.listen(PORT, '0.0.0.0', () => console.log(`Rifad API listening on port ${PORT}`)));
 }
