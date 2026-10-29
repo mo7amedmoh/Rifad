@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { DEFAULT_SCHOOLS_URL, parseSchoolCsv, toGoogleCsvUrl, fetchSchoolCsv } = require('./schools');
+const { DEFAULT_SCHOOLS_URL, parseSchoolCsv, mergeSchoolSourceData, toGoogleCsvUrl, fetchSchoolCsv } = require('./schools');
 
 test('parses the published school-sheet headers and normalizes school numbers', () => {
   const csv = 'ID,اسم الموقع,الرقم الوزاري,العنوان,زون,مشرف الشركة,المسئول,نوع المدرسة\n1,مدرسة تجريبية,S- ١٢٣ ٤٥٦,منطقة الرياض,G2-Z6,مشرف تجريبي,مسؤول المدرسة,حكومية\n';
@@ -61,7 +61,7 @@ test('preserves every school-sheet column, translates English headers, and retai
   assert.equal(school.longitude, '46.63827736');
 });
 
-test('uses the P, T, and V positions when optional school attribute headers are unavailable', () => {
+test('does not infer school attributes from fixed column positions after a sheet layout change', () => {
   const headers = Array(24).fill('');
   headers[1] = 'رقم المدرسة';
   headers[2] = 'اسم المدرسة';
@@ -75,9 +75,96 @@ test('uses the P, T, and V positions when optional school attribute headers are 
   values[19] = 'بنات';
   values[21] = '275';
   const [school] = parseSchoolCsv(Buffer.from(`${headers.join(',')}\n${values.join(',')}\n`));
-  assert.equal(school.buildingType, 'مدرسة حكومية');
+  assert.equal(school.buildingType, '');
+  assert.equal(school.schoolType, '');
+  assert.equal(school.occupancySize, '');
+  assert.ok(school.sourceData.some((field) => field.label === 'حقل P' && field.value === 'مدرسة حكومية'));
+  assert.ok(school.sourceData.some((field) => field.label === 'حقل T' && field.value === 'بنات'));
+  assert.ok(school.sourceData.some((field) => field.label === 'حقل V' && field.value === '275'));
+});
+
+test('parses the expanded 40-column school sheet by header names', () => {
+  const headers = [
+    'م', 'المبني ', 'الرقم الوزاري', 'اسم المدرسة ', 'العنوان', 'نوع المبنى', 'مكتب التعليم', 'النوع',
+    'المرحلة', 'الملكية', 'الحي', 'حالة الوحدة', 'مقاول النظافة', 'مقاول الصيانه',
+    'مقاول الامن و السلامة', 'مقاول المصاعد', 'مقاول التكييف', 'عدد الفصول', 'حجم المدرسة',
+    'حجم المبنى', 'الزون', 'الشرقيات', 'الشماليات', 'اسم مهندس المقاول', 'رقم الاتصال',
+    'اسم المشرف (صيانة)', 'رقم الاتصال', 'اسم المشرف (نظافة)', 'رقم التواصل', 'البواب',
+    'رقم الاتصال', 'اسم المدير / ة', 'رقم الاتصال', 'ايميل مدير/ة المدرسة', 'اسم مهندس المرافق',
+    'رقم الاتصال', 'اسم عامل النظافة 1', 'رقم التواصل', 'اسم عامل النظافة2', 'رقم التواصل'
+  ];
+  const values = Array(headers.length).fill('');
+  Object.assign(values, {
+    2: '123456',
+    3: 'مدرسة تجريبية',
+    4: 'الرياض',
+    5: 'مبنى تعليمي',
+    6: 'مكتب شمال الرياض',
+    7: 'بنين',
+    8: 'متوسطة',
+    12: 'شركة النظافة',
+    18: 'متوسط',
+    19: 'كبير',
+    21: '46.63827736',
+    22: '24.74895617',
+    23: 'مهندس المقاول',
+    24: '500000001',
+    25: 'مشرف الصيانة',
+    26: '500000002',
+    27: 'مشرف النظافة',
+    28: '500000003',
+    31: 'مدير المدرسة',
+    32: '500000004',
+    33: 'school@example.test',
+    34: 'مهندس المرافق',
+    35: '500000005'
+  });
+  const [school] = parseSchoolCsv(Buffer.from(`${headers.join(',')}\n${values.join(',')}\n`));
+  assert.equal(school.number, '123456');
+  assert.equal(school.name, 'مدرسة تجريبية');
+  assert.equal(school.region, 'الرياض');
+  assert.equal(school.supervisor, 'مشرف الصيانة');
+  assert.equal(school.buildingType, 'مبنى تعليمي');
+  assert.equal(school.schoolType, 'بنين');
+  assert.equal(school.occupancySize, 'كبير');
+  assert.equal(school.longitude, '46.63827736');
+  assert.equal(school.latitude, '24.74895617');
+  assert.equal(school.sourceData.length, 40);
+  assert.equal(new Set(school.sourceData.map((field) => field.key)).size, 40);
+  assert.ok(school.sourceData.some((field) => field.label === 'رقم الاتصال لمهندس المقاول' && field.value === '500000001'));
+  assert.ok(school.sourceData.some((field) => field.label === 'رقم الاتصال لمشرف الصيانة' && field.value === '500000002'));
+  assert.ok(school.sourceData.some((field) => field.label === 'رقم التواصل لمشرف النظافة' && field.value === '500000003'));
+  assert.ok(school.sourceData.some((field) => field.label === 'رقم الاتصال لمدير المدرسة' && field.value === '500000004'));
+  assert.ok(school.sourceData.some((field) => field.label === 'خط الطول' && field.value === '46.63827736'));
+  assert.ok(school.sourceData.some((field) => field.label === 'خط العرض' && field.value === '24.74895617'));
+});
+
+test('uses the next populated named column when a preferred header is empty', () => {
+  const csv = [
+    'الرقم الوزاري,اسم المدرسة,حجم المبنى,حجم المدرسة,اسم المشرف (صيانة),مشرف الشركة,النوع,gender',
+    '123,مدرسة,,كبير,,مشرف بديل,,بنات'
+  ].join('\n');
+  const [school] = parseSchoolCsv(Buffer.from(csv));
+  assert.equal(school.occupancySize, 'كبير');
+  assert.equal(school.supervisor, 'مشرف بديل');
   assert.equal(school.schoolType, 'بنات');
-  assert.equal(school.occupancySize, '275');
+});
+
+test('matches reordered columns by stable header keys and keeps values from removed columns', () => {
+  const first = parseSchoolCsv(Buffer.from('رقم المدرسة,اسم المدرسة,اسم المشرف (صيانة),رقم الاتصال,حقل قديم\n123,مدرسة,مشرف,555,قيمة محفوظة\n'))[0];
+  const next = parseSchoolCsv(Buffer.from('حقل جديد,اسم المشرف (صيانة),رقم الاتصال,اسم المدرسة,رقم المدرسة\nجديد,مشرف محدث,,مدرسة,123\n'))[0];
+  const merged = mergeSchoolSourceData(first.sourceData, next.sourceData);
+  assert.equal(next.supervisor, 'مشرف محدث');
+  assert.equal(merged.find((field) => field.key === next.sourceData.find((item) => item.label === 'رقم الاتصال لمشرف الصيانة').key)?.value, '555');
+  assert.ok(merged.some((field) => field.label === 'حقل قديم' && field.value === 'قيمة محفوظة'));
+  assert.ok(merged.some((field) => field.label === 'حقل جديد' && field.value === 'جديد'));
+});
+
+test('preserves row values beyond the header width as additional details', () => {
+  const [school] = parseSchoolCsv(Buffer.from('رقم المدرسة,اسم المدرسة\n123,مدرسة,بيان إضافي\n'));
+  assert.equal(school.sourceData.length, 3);
+  assert.equal(school.sourceData[2].label, 'بيان 3');
+  assert.equal(school.sourceData[2].value, 'بيان إضافي');
 });
 
 test('converts the provided Google sharing URL into a CSV export URL', () => {

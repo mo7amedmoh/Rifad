@@ -11,7 +11,7 @@ const { z } = require('zod');
 const db = require('./db');
 const SQLiteSessionStore = require('./session-store');
 const { parseCsv, normalizeSchoolNumber } = require('./importer');
-const { DEFAULT_SCHOOLS_URL, parseSchoolCsv, fetchSchoolCsv } = require('./schools');
+const { DEFAULT_SCHOOLS_URL, parseSchoolCsv, mergeSchoolSourceData, fetchSchoolCsv } = require('./schools');
 const { getPriorityAssessment } = require('./priority-matrix');
 
 const app = express();
@@ -938,9 +938,7 @@ function storeSchools(rows, userId = null, source = 'sync') {
       const before = db.prepare('SELECT * FROM schools WHERE school_number = ?').get(school.number);
       const previousSourceData = JSON.parse(before?.source_data || '[]');
       const incomingSourceData = school.sourceData || [];
-      const sourceData = source === 'sync' || incomingSourceData.length >= previousSourceData.length
-        ? incomingSourceData
-        : previousSourceData;
+      const sourceData = mergeSchoolSourceData(previousSourceData, incomingSourceData);
       const after = {
         school_number: school.number,
         name: school.name,

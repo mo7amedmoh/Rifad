@@ -443,7 +443,7 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
   assert.equal(updatedLoginResponse.status, 200);
 
   const nativeFetch = global.fetch;
-  const schoolSheetCsv = [
+  let schoolSheetCsv = [
     'ID,اسم الموقع,الرقم الوزاري,العنوان,زون,مجموعة,خط العرض,خط الطول,المسئول,رقم الجوال,مشرف الشركة,رقم الجوال,مهندس الشركة,رقم الجوال,نوع الملكية,نوع المبني,الحالة,maintenance,stage,gender,فصول تعليمية,occupancy_size,study_time,المبنى الملحق',
     '10753,مدرسة تجريبية مصححة,777888,منطقة الرياض,G2-Z6,1,24.74895617,46.63827736,مسؤول المدرسة,500000001,مشرف الشيت,500000002,مهندس المنطقة,500000003,مستقل,كبير,مستخدم,تشغيل وصيانة,المتوسطة,بنين,12,كبير,صباح,ملحق'
   ].join('\n');
@@ -469,10 +469,45 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
     const schoolDetailsResponse = await nativeFetch(`${base}/api/schools/777888`, { headers: { Cookie: cookie } });
     assert.equal(schoolDetailsResponse.status, 200);
     const schoolDetails = (await schoolDetailsResponse.json()).item;
-    assert.equal(schoolDetails.source_data.length, 24);
+    assert.ok(schoolDetails.source_data.length >= 24);
     assert.equal(schoolDetails.source_data[0].label, 'معرّف السجل');
     assert.ok(schoolDetails.source_data.some((field) => field.label === 'خط العرض' && field.value === '24.74895617'));
     assert.ok(schoolDetails.source_data.some((field) => field.label === 'الصيانة' && field.value === 'تشغيل وصيانة'));
+
+    const expandedHeaders = [
+      'م', 'المبني ', 'الرقم الوزاري', 'اسم المدرسة ', 'العنوان', 'نوع المبنى', 'مكتب التعليم', 'النوع',
+      'المرحلة', 'الملكية', 'الحي', 'حالة الوحدة', 'مقاول النظافة', 'مقاول الصيانه',
+      'مقاول الامن و السلامة', 'مقاول المصاعد', 'مقاول التكييف', 'عدد الفصول', 'حجم المدرسة',
+      'حجم المبنى', 'الزون', 'الشرقيات', 'الشماليات', 'اسم مهندس المقاول', 'رقم الاتصال',
+      'اسم المشرف (صيانة)', 'رقم الاتصال', 'اسم المشرف (نظافة)', 'رقم التواصل', 'البواب',
+      'رقم الاتصال', 'اسم المدير / ة', 'رقم الاتصال', 'ايميل مدير/ة المدرسة', 'اسم مهندس المرافق',
+      'رقم الاتصال', 'اسم عامل النظافة 1', 'رقم التواصل', 'اسم عامل النظافة2', 'رقم التواصل'
+    ];
+    const expandedValues = Array(expandedHeaders.length).fill('');
+    Object.assign(expandedValues, {
+      2: '777888',
+      3: 'مدرسة تجريبية مصححة',
+      4: 'منطقة الرياض',
+      5: 'مبنى تعليمي',
+      6: 'مكتب شمال الرياض',
+      7: 'بنين',
+      12: 'شركة نظافة محدثة',
+      19: 'كبير',
+      25: 'مشرف صيانة محدث'
+    });
+    schoolSheetCsv = `${expandedHeaders.join(',')}\n${expandedValues.join(',')}\n`;
+    const expandedSyncResponse = await nativeFetch(`${base}/api/schools/sync`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'X-CSRF-Token': updatedSessionData.csrfToken, 'Content-Type': 'application/json' },
+      body: '{}'
+    });
+    assert.equal(expandedSyncResponse.status, 200);
+    const expandedSchool = db.prepare('SELECT * FROM schools WHERE school_number = ?').get('777888');
+    assert.equal(expandedSchool.supervisor, 'مشرف صيانة محدث');
+    const expandedSourceData = JSON.parse(expandedSchool.source_data);
+    assert.ok(expandedSourceData.length >= 40);
+    assert.ok(expandedSourceData.some((field) => field.label === 'خط العرض' && field.value === '24.74895617'));
+    assert.ok(expandedSourceData.some((field) => field.label === 'مقاول النظافة' && field.value === 'شركة نظافة محدثة'));
 
     const addSchoolResponse = await nativeFetch(`${base}/api/schools`, {
       method: 'POST',
