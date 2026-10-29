@@ -979,17 +979,10 @@ function SchoolDetailsModal({ schoolNumber, onClose, notify }) {
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [onClose]);
-  const coordinates = (school?.source_data || []).reduce((result, field) => {
-    if (field.label === 'خط العرض') result.latitude = field.value;
-    if (field.label === 'خط الطول') result.longitude = field.value;
-    return result;
-  }, {});
-  const latitude = Number(coordinates.latitude);
-  const longitude = Number(coordinates.longitude);
-  const hasCoordinates = Boolean(coordinates.latitude && coordinates.longitude) &&
-    Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 &&
-    Number.isFinite(longitude) && longitude >= -180 && longitude <= 180;
-  const mapUrl = hasCoordinates ? `https://www.google.com/maps?q=${latitude},${longitude}` : '';
+  const coordinates = school?.map_coordinates;
+  const mapUrl = coordinates
+    ? `https://www.google.com/maps?q=${coordinates.latitude},${coordinates.longitude}`
+    : '';
   return <div className="ticket-detail-backdrop school-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="ticket-detail-modal school-detail-modal" role="dialog" aria-modal="true" aria-labelledby="school-detail-title">
       <div className="ticket-detail-heading"><div><span className="eyebrow">بيانات المدرسة</span><h2 id="school-detail-title">{school?.school_number || schoolNumber}</h2></div><button className="icon-btn" onClick={onClose} aria-label="إغلاق تفاصيل المدرسة"><X size={19} /></button></div>

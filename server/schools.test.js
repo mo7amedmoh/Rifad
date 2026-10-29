@@ -1,6 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { DEFAULT_SCHOOLS_URL, parseSchoolCsv, mergeSchoolSourceData, toGoogleCsvUrl, fetchSchoolCsv } = require('./schools');
+const {
+  DEFAULT_SCHOOLS_URL,
+  parseSchoolCsv,
+  mergeSchoolSourceData,
+  getSchoolMapCoordinates,
+  normalizeSchoolCoordinateLabels,
+  toGoogleCsvUrl,
+  fetchSchoolCsv
+} = require('./schools');
 
 test('parses the published school-sheet headers and normalizes school numbers', () => {
   const csv = 'ID,اسم الموقع,الرقم الوزاري,العنوان,زون,مشرف الشركة,المسئول,نوع المدرسة\n1,مدرسة تجريبية,S- ١٢٣ ٤٥٦,منطقة الرياض,G2-Z6,مشرف تجريبي,مسؤول المدرسة,حكومية\n';
@@ -148,6 +156,32 @@ test('uses the next populated named column when a preferred header is empty', ()
   assert.equal(school.occupancySize, 'كبير');
   assert.equal(school.supervisor, 'مشرف بديل');
   assert.equal(school.schoolType, 'بنات');
+});
+
+test('detects swapped Saudi latitude and longitude and avoids invalid map coordinates', () => {
+  const swappedFields = [
+    { header: 'الشماليات', label: 'خط العرض', value: '46.71596396' },
+    { header: 'الشرقيات', label: 'خط الطول', value: '24.75668768' }
+  ];
+  assert.deepEqual(getSchoolMapCoordinates(swappedFields), {
+    latitude: 24.75668768,
+    longitude: 46.71596396,
+    swapped: true
+  });
+  assert.deepEqual(normalizeSchoolCoordinateLabels(swappedFields).map(({ label }) => label), ['خط الطول', 'خط العرض']);
+  const directFields = [
+    { label: 'خط العرض', value: '24.75668768' },
+    { label: 'خط الطول', value: '46.71596396' }
+  ];
+  assert.deepEqual(getSchoolMapCoordinates(directFields), {
+    latitude: 24.75668768,
+    longitude: 46.71596396,
+    swapped: false
+  });
+  assert.equal(getSchoolMapCoordinates([
+    { label: 'خط العرض', value: '46.71596396' },
+    { label: 'خط الطول', value: '121.9' }
+  ]), null);
 });
 
 test('matches reordered columns by stable header keys and keeps values from removed columns', () => {

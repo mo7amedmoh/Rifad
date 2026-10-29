@@ -11,7 +11,14 @@ const { z } = require('zod');
 const db = require('./db');
 const SQLiteSessionStore = require('./session-store');
 const { parseCsv, normalizeSchoolNumber } = require('./importer');
-const { DEFAULT_SCHOOLS_URL, parseSchoolCsv, mergeSchoolSourceData, fetchSchoolCsv } = require('./schools');
+const {
+  DEFAULT_SCHOOLS_URL,
+  parseSchoolCsv,
+  mergeSchoolSourceData,
+  getSchoolMapCoordinates,
+  normalizeSchoolCoordinateLabels,
+  fetchSchoolCsv
+} = require('./schools');
 const { getPriorityAssessment } = require('./priority-matrix');
 
 const app = express();
@@ -648,7 +655,14 @@ app.get('/api/schools/:schoolNumber', requireRole(...roles), (req, res) => {
   const schoolNumber = normalizeSchoolNumber(req.params.schoolNumber);
   const school = db.prepare('SELECT * FROM schools WHERE school_number = ?').get(schoolNumber);
   if (!school) return res.status(404).json({ error: 'المدرسة غير موجودة في دليل المدارس.' });
-  res.json({ item: { ...school, source_data: JSON.parse(school.source_data || '[]') } });
+  const sourceData = JSON.parse(school.source_data || '[]');
+  res.json({
+    item: {
+      ...school,
+      source_data: normalizeSchoolCoordinateLabels(sourceData),
+      map_coordinates: getSchoolMapCoordinates(sourceData)
+    }
+  });
 });
 app.post('/api/schools', requireRole('admin', 'receiver'), (req, res) => {
   const parsed = z.object({

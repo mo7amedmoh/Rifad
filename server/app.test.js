@@ -493,6 +493,8 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
       7: 'بنين',
       12: 'شركة نظافة محدثة',
       19: 'كبير',
+      21: '24.75668768',
+      22: '46.71596396',
       25: 'مشرف صيانة محدث'
     });
     schoolSheetCsv = `${expandedHeaders.join(',')}\n${expandedValues.join(',')}\n`;
@@ -506,8 +508,17 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
     assert.equal(expandedSchool.supervisor, 'مشرف صيانة محدث');
     const expandedSourceData = JSON.parse(expandedSchool.source_data);
     assert.ok(expandedSourceData.length >= 40);
-    assert.ok(expandedSourceData.some((field) => field.label === 'خط العرض' && field.value === '24.74895617'));
+    assert.ok(expandedSourceData.some((field) => field.label === 'خط العرض' && field.value === '46.71596396'));
     assert.ok(expandedSourceData.some((field) => field.label === 'مقاول النظافة' && field.value === 'شركة نظافة محدثة'));
+    const expandedDetailsResponse = await nativeFetch(`${base}/api/schools/777888`, { headers: { Cookie: cookie } });
+    const expandedDetails = (await expandedDetailsResponse.json()).item;
+    assert.deepEqual(expandedDetails.map_coordinates, {
+      latitude: 24.75668768,
+      longitude: 46.71596396,
+      swapped: true
+    });
+    assert.ok(expandedDetails.source_data.some((field) => field.header === 'الشماليات' && field.label === 'خط الطول'));
+    assert.ok(expandedDetails.source_data.some((field) => field.header === 'الشرقيات' && field.label === 'خط العرض'));
 
     const addSchoolResponse = await nativeFetch(`${base}/api/schools`, {
       method: 'POST',

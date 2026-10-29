@@ -47,6 +47,30 @@ function displayHeader(header, index, headers) {
   return String(header).trim() || `بيان ${index + 1}`;
 }
 
+function getSchoolMapCoordinates(sourceData) {
+  const latitudeField = sourceData?.find((field) => normalizeHeader(field.label) === normalizeHeader('خط العرض'));
+  const longitudeField = sourceData?.find((field) => normalizeHeader(field.label) === normalizeHeader('خط الطول'));
+  if (!latitudeField || !longitudeField) return null;
+  const latitude = Number(latitudeField.value);
+  const longitude = Number(longitudeField.value);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+
+  const isSaudiLocation = (lat, lon) => lat >= 16 && lat <= 33.5 && lon >= 34 && lon <= 56.5;
+  if (isSaudiLocation(latitude, longitude)) return { latitude, longitude, swapped: false };
+  if (isSaudiLocation(longitude, latitude)) return { latitude: longitude, longitude: latitude, swapped: true };
+  return null;
+}
+
+function normalizeSchoolCoordinateLabels(sourceData) {
+  const coordinates = getSchoolMapCoordinates(sourceData);
+  if (!coordinates?.swapped) return sourceData;
+  return sourceData.map((field) => {
+    if (normalizeHeader(field.label) === normalizeHeader('خط العرض')) return { ...field, label: 'خط الطول' };
+    if (normalizeHeader(field.label) === normalizeHeader('خط الطول')) return { ...field, label: 'خط العرض' };
+    return field;
+  });
+}
+
 function parseSchoolCsv(buffer) {
   let records;
   try {
@@ -211,4 +235,12 @@ async function fetchSchoolCsv(value, fetchImpl = fetch) {
   return readLimitedResponse(response);
 }
 
-module.exports = { DEFAULT_SCHOOLS_URL, parseSchoolCsv, mergeSchoolSourceData, toGoogleCsvUrl, fetchSchoolCsv };
+module.exports = {
+  DEFAULT_SCHOOLS_URL,
+  parseSchoolCsv,
+  mergeSchoolSourceData,
+  getSchoolMapCoordinates,
+  normalizeSchoolCoordinateLabels,
+  toGoogleCsvUrl,
+  fetchSchoolCsv
+};
