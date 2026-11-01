@@ -49,8 +49,8 @@ test('summarizes eligible school buildings, elevator contractors, gender, and ne
 
 test('normalizes building type and elevator contractor formatting in school summaries', () => {
   const summary = summarizeSchools([
-    { building_type: 'مست\u200fقل', elevator_contractor: 'شركة المصاعد', source_data: '[]' },
-    { building_type: 'مشترك-أساسي', elevator_contractor: 'لا  ينطبق', source_data: '[]' },
+    { building_type: 'مست\u200dقل', elevator_contractor: 'شركة المصاعد', source_data: '[]' },
+    { building_type: 'مشترك-أساسي', elevator_contractor: 'لا ينطبق (غير متاح)', source_data: '[]' },
     { building_type: 'مشترك ملحق', elevator_contractor: 'شركة المصاعد', source_data: '[]' }
   ]);
   assert.equal(summary.totalSchools, 2);
