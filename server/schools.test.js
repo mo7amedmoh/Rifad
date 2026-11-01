@@ -3,12 +3,49 @@ const assert = require('node:assert/strict');
 const {
   DEFAULT_SCHOOLS_URL,
   parseSchoolCsv,
+  summarizeSchools,
   mergeSchoolSourceData,
   getSchoolMapCoordinates,
   normalizeSchoolCoordinateLabels,
   toGoogleCsvUrl,
   fetchSchoolCsv
 } = require('./schools');
+
+test('summarizes eligible school buildings, elevator contractors, gender, and neighborhoods', () => {
+  const summary = summarizeSchools([
+    {
+      building_type: 'مستقل',
+      school_type: 'بنين',
+      elevator_contractor: 'شركة المصاعد',
+      source_data: [{ header: 'الحي', value: 'النخيل' }]
+    },
+    {
+      building_type: 'مشترك أساسي',
+      school_type: 'بنات',
+      elevator_contractor: 'لا ينطبق',
+      source_data: [{ header: 'neighborhood', value: 'النخيل' }]
+    },
+    {
+      building_type: 'مشترك ملحق',
+      school_type: 'بنين',
+      elevator_contractor: 'مقاول المصاعد',
+      source_data: [{ header: 'الحي', value: 'الروضة' }]
+    },
+    {
+      building_type: 'مبنى آخر',
+      school_type: 'بنات',
+      elevator_contractor: '',
+      source_data: []
+    }
+  ]);
+  assert.equal(summary.totalSchools, 2);
+  assert.equal(summary.elevatorCount, 1);
+  assert.equal(summary.boysCount, 1);
+  assert.equal(summary.girlsCount, 1);
+  assert.deepEqual(summary.neighborhoods, [
+    { name: 'النخيل', count: 2 }
+  ]);
+});
 
 test('parses the published school-sheet headers and normalizes school numbers', () => {
   const csv = 'ID,اسم الموقع,الرقم الوزاري,العنوان,زون,مشرف الشركة,المسئول,نوع المدرسة\n1,مدرسة تجريبية,S- ١٢٣ ٤٥٦,منطقة الرياض,G2-Z6,مشرف تجريبي,مسؤول المدرسة,حكومية\n';

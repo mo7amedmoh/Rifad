@@ -6,7 +6,7 @@ import {
   Activity, AlertCircle, AlertTriangle, ArrowDownToLine, ArrowLeft,
   Building2, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight,
   ClipboardList, Clock3, CloudUpload, FileSpreadsheet, Filter, LayoutDashboard, Share2,
-  LockKeyhole, LogOut, Menu, Plus, Search, Settings, ShieldCheck, Sparkles, Users,
+  LockKeyhole, LogOut, MapPin, Menu, Plus, Search, Settings, ShieldCheck, Sparkles, Users,
   Wrench, X
 } from 'lucide-react';
 import './styles.css';
@@ -859,6 +859,7 @@ function Schools({ csrf, session, notify }) {
   const [query, setQuery] = useState('');
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
+  const [summary, setSummary] = useState(null);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(null);
   const [selectedSchool, setSelectedSchool] = useState(null);
@@ -872,17 +873,22 @@ function Schools({ csrf, session, notify }) {
     try { const data = await request(`/api/schools?q=${encodeURIComponent(search)}`); setItems(data.items); setTotal(data.total); }
     catch (error) { notify(error.message); }
   }, [notify, query]);
+  const loadSummary = useCallback(async () => {
+    try { setSummary(await request('/api/schools/summary')); }
+    catch (error) { notify(error.message); }
+  }, [notify]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadSummary(); }, [loadSummary]);
   const upload = async (file) => {
     if (!file) return;
     setBusy(true);
-    try { const result = await request('/api/schools/import', { method: 'POST', csrf, body: JSON.stringify({ csv: await file.text() }) }); notify(result.message); await load(); }
+    try { const result = await request('/api/schools/import', { method: 'POST', csrf, body: JSON.stringify({ csv: await file.text() }) }); notify(result.message); await Promise.all([load(), loadSummary()]); }
     catch (error) { notify(error.message); }
     finally { setBusy(false); if (fileRef.current) fileRef.current.value = ''; }
   };
   const sync = async () => {
     setBusy(true);
-    try { const result = await request('/api/schools/sync', { method: 'POST', csrf, body: '{}' }); notify(result.message); setQuery(''); await load(''); }
+    try { const result = await request('/api/schools/sync', { method: 'POST', csrf, body: '{}' }); notify(result.message); setQuery(''); await Promise.all([load(''), loadSummary()]); }
     catch (error) { notify(error.message); }
     finally { setBusy(false); }
   };
@@ -895,7 +901,7 @@ function Schools({ csrf, session, notify }) {
       setAdding(false);
       setNewSchool({ schoolNumber: '', name: '', supervisor: '', region: '', schoolType: '', buildingType: '', occupancySize: '' });
       setQuery('');
-      await load('');
+      await Promise.all([load(''), loadSummary()]);
     } catch (error) { notify(error.message); }
     finally { setBusy(false); }
   };
@@ -905,7 +911,7 @@ function Schools({ csrf, session, notify }) {
     try {
       await request(`/api/schools/${encodeURIComponent(school.school_number)}`, { method: 'DELETE', csrf });
       notify('حُذفت المدرسة من الدليل مع الاحتفاظ ببلاغاتها.');
-      await load();
+      await Promise.all([load(), loadSummary()]);
     } catch (error) { notify(error.message); }
     finally { setBusy(false); }
   };
@@ -918,7 +924,7 @@ function Schools({ csrf, session, notify }) {
       notify(result.message);
       setEditing(null);
       setQuery('');
-      await load('');
+      await Promise.all([load(''), loadSummary()]);
     } catch (error) { notify(error.message); }
     finally { setBusy(false); }
   };
@@ -941,7 +947,7 @@ function Schools({ csrf, session, notify }) {
       });
       notify('تم حفظ بيانات المدرسة.');
       setEditing(null);
-      await load();
+      await Promise.all([load(), loadSummary()]);
     } catch (error) { notify(error.message); }
     finally { setBusy(false); }
   };
@@ -952,7 +958,20 @@ function Schools({ csrf, session, notify }) {
     onChange={(event) => setEditing({ ...editing, [field]: event.target.value })}
   />;
   return <><PageHeading eyebrow="دليل المدارس" title="قاعدة بيانات المدارس" description="اربط أرقام المدارس بالمشرف والمنطقة لتحسين دقة التحليلات." action={canEdit && <div className="heading-actions"><input ref={fileRef} type="file" accept=".csv,text/csv" className="visually-hidden" onChange={(e) => upload(e.target.files?.[0])} />{session.role === 'admin' && <button className="btn btn-outline" onClick={deleteAllSchools} disabled={busy || total === 0}><X size={15} />حذف جميع المدارس</button>}<button className="btn btn-outline" onClick={() => { setAdding(!adding); setEditing(null); }} disabled={busy}><Plus size={16} />إضافة مدرسة</button><button className="btn btn-primary" onClick={() => fileRef.current?.click()} disabled={busy}><CloudUpload size={17} />استيراد قائمة المدارس</button></div>} />
-    <div className="school-summary"><div className="school-summary-icon"><Building2 size={22} /></div><div><span>مدرسة في قاعدة البيانات</span><strong>{fmt.format(total)}</strong></div><div className="school-summary-note"><CheckCircle2 size={15} />توحيد رقم المدرسة يربط البلاغ بالمشرف تلقائيًا</div></div>
+    <section className="school-overview">
+      <div className="school-overview-metrics">
+        <article className="school-overview-card"><span><Building2 size={16} />عدد المدارس</span><strong>{summary ? fmt.format(summary.totalSchools) : '—'}</strong><small>مستقل + مشترك أساسي</small></article>
+        <article className="school-overview-card"><span><CheckCircle2 size={16} />مدارس بها مصعد</span><strong>{summary ? fmt.format(summary.elevatorCount) : '—'}</strong><small>لها مقاول مصاعد مسجل</small></article>
+        <article className="school-overview-card"><span><Users size={16} />مدارس بنين</span><strong>{summary ? fmt.format(summary.boysCount) : '—'}</strong><small>حسب نوع المدرسة</small></article>
+        <article className="school-overview-card"><span><Users size={16} />مدارس بنات</span><strong>{summary ? fmt.format(summary.girlsCount) : '—'}</strong><small>حسب نوع المدرسة</small></article>
+      </div>
+      <div className="panel school-neighborhood-summary">
+        <div className="panel-heading"><div><h2><MapPin size={17} />المدارس حسب الحي</h2><p>توزيع المدارس المستقلة والمشتركة الأساسية حسب الحي</p></div><span className="school-directory-total">{fmt.format(total)} سجل في الدليل</span></div>
+        <div className="school-neighborhood-list">{summary?.neighborhoods.length
+          ? summary.neighborhoods.map(({ name, count }) => <div className="school-neighborhood-row" key={name}><span>{name}</span><strong>{fmt.format(count)}</strong></div>)
+          : <span className="school-neighborhood-empty">{summary ? 'لا توجد بيانات أحياء في الدليل.' : 'جارٍ تحميل الملخص…'}</span>}</div>
+      </div>
+    </section>
     <section className="panel school-panel"><div className="panel-heading"><div><h2>دليل المدارس والمشرفين</h2><p>تتم إزالة البادئة S- والمسافات من الرقم الوزاري عند الاستيراد. تعيد المزامنة مطابقة الاسم الفريد لتحديث رقم المدرسة دون تكرارها.</p></div><div className="search-field compact-search"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث باسم المدرسة أو الرقم…" /></div></div>
     {adding && <form className="school-create-form" onSubmit={addSchool}>{[
       ['schoolNumber', 'الرقم الوزاري', true],

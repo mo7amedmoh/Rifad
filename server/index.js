@@ -14,6 +14,7 @@ const { parseCsv, normalizeSchoolNumber } = require('./importer');
 const {
   DEFAULT_SCHOOLS_URL,
   parseSchoolCsv,
+  summarizeSchools,
   mergeSchoolSourceData,
   getSchoolMapCoordinates,
   normalizeSchoolCoordinateLabels,
@@ -668,6 +669,11 @@ app.get('/api/schools', requireRole(...roles), (req, res) => {
     .all(q, like, normalizedNumber, numberLike, like, like);
   const total = db.prepare('SELECT COUNT(*) AS count FROM schools').get().count;
   res.json({ items, total });
+});
+app.get('/api/schools/summary', requireRole(...roles), (req, res) => {
+  const schools = db.prepare(`SELECT school_type, building_type, elevator_contractor, source_data
+    FROM schools`).all();
+  res.json(summarizeSchools(schools));
 });
 app.get('/api/schools/:schoolNumber', requireRole(...roles), (req, res) => {
   const schoolNumber = normalizeSchoolNumber(req.params.schoolNumber);

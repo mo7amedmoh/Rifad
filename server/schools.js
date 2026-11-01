@@ -16,6 +16,44 @@ function normalizeHeader(value) {
     .replace(/\s+/g, ' ');
 }
 
+function summarizeSchools(schools) {
+  const normalizeValue = (value) => normalizeHeader(value);
+  const isSchoolBuilding = (value) => ['مستقل', 'مشترك اساسي'].includes(normalizeValue(value));
+  const eligibleSchools = schools.filter((school) => isSchoolBuilding(school.building_type));
+  const neighborhoods = new Map();
+  let elevatorCount = 0;
+  let boysCount = 0;
+  let girlsCount = 0;
+
+  for (const school of eligibleSchools) {
+    const contractor = normalizeValue(school.elevator_contractor);
+    if (contractor && contractor !== normalizeValue('لا ينطبق')) elevatorCount += 1;
+
+    const gender = normalizeValue(school.school_type);
+    if (gender.includes('بنين') || gender.includes('boys')) boysCount += 1;
+    if (gender.includes('بنات') || gender.includes('girls')) girlsCount += 1;
+
+    const sourceData = Array.isArray(school.source_data)
+      ? school.source_data
+      : JSON.parse(school.source_data || '[]');
+    const neighborhood = sourceData.find((field) =>
+      ['الحي', 'اسم الحي', 'الحي السكني', 'neighborhood', 'district']
+        .includes(normalizeValue(field.header || field.label)));
+    const name = neighborhood?.value?.trim() || 'غير محدد';
+    neighborhoods.set(name, (neighborhoods.get(name) || 0) + 1);
+  }
+
+  return {
+    totalSchools: eligibleSchools.length,
+    elevatorCount,
+    boysCount,
+    girlsCount,
+    neighborhoods: [...neighborhoods.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'ar'))
+  };
+}
+
 function displayHeader(header, index, headers) {
   const normalized = normalizeHeader(header);
   const labels = {
@@ -240,6 +278,7 @@ async function fetchSchoolCsv(value, fetchImpl = fetch) {
 module.exports = {
   DEFAULT_SCHOOLS_URL,
   parseSchoolCsv,
+  summarizeSchools,
   mergeSchoolSourceData,
   getSchoolMapCoordinates,
   normalizeSchoolCoordinateLabels,

@@ -610,10 +610,10 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
       method: 'POST',
       headers: { Cookie: cookie, 'X-CSRF-Token': updatedSessionData.csrfToken, 'Content-Type': 'application/json' },
       body: JSON.stringify({ csv: [
-        'رقم المدرسة,اسم المدرسة,نوع المبنى,مقاول المصاعد,الشماليات,الشرقيات',
-        '300001,مدرسة أم,مستقل,شركة المصاعد,46.70000,24.70000',
-        '300002,مدرسة أم ثانية,مشترك أساسي,لا ينطبق,46.70020,24.70020',
-        '300003,مدرسة ملحقة,مشترك ملحق,لا ينطبق,46.70001,24.70001'
+        'رقم المدرسة,اسم المدرسة,نوع المبنى,مقاول المصاعد,الشماليات,الشرقيات,نوع المدرسة,الحي',
+        '300001,مدرسة أم,مستقل,شركة المصاعد,46.70000,24.70000,بنين,النخيل',
+        '300002,مدرسة أم ثانية,مشترك أساسي,لا ينطبق,46.70020,24.70020,بنات,الروضة',
+        '300003,مدرسة ملحقة,مشترك ملحق,لا ينطبق,46.70001,24.70001,بنين,النخيل'
       ].join('\n') })
     });
     assert.equal(contractSchoolsImport.status, 200);
@@ -624,6 +624,15 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
       { school_number: '300002', counts_in_kpi: 1, has_elevator: 0, parent_school_id: null },
       { school_number: '300003', counts_in_kpi: 0, has_elevator: 0, parent_school_id: '300001' }
     ]);
+    const schoolSummaryResponse = await nativeFetch(`${base}/api/schools/summary`, { headers: { Cookie: cookie } });
+    assert.equal(schoolSummaryResponse.status, 200);
+    assert.deepEqual(await schoolSummaryResponse.json(), {
+      totalSchools: 2,
+      elevatorCount: 1,
+      boysCount: 1,
+      girlsCount: 1,
+      neighborhoods: [{ name: 'الروضة', count: 1 }, { name: 'النخيل', count: 1 }]
+    });
     const attachedReportImport = await nativeFetch(`${base}/api/import/tickets`, {
       method: 'POST',
       headers: { Cookie: cookie, 'X-CSRF-Token': updatedSessionData.csrfToken, 'Content-Type': 'text/csv' },
