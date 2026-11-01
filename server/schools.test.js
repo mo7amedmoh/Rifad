@@ -95,6 +95,30 @@ test('reads elevator contractor from its named sheet column', () => {
   assert.equal(school.elevatorContractor, 'شركة المصاعد');
 });
 
+test('keeps the counted school when an attached building repeats its ministry number', () => {
+  const schools = parseSchoolCsv(Buffer.from([
+    'الرقم الوزاري,اسم المدرسة,نوع المبنى,مقاول المصاعد',
+    '95183,الابتدائية الخامسة بعد المائة 105,مشترك أساسي,شركة المصاعد',
+    '95183,الروضة الملحقة بالابتدائية 105,مشترك ملحق,لا ينطبق'
+  ].join('\n')));
+
+  assert.equal(schools.length, 1);
+  assert.equal(schools[0].name, 'الابتدائية الخامسة بعد المائة 105');
+  assert.equal(schools[0].buildingType, 'مشترك أساسي');
+  assert.deepEqual(summarizeSchools(schools.map((school) => ({
+    building_type: school.buildingType,
+    elevator_contractor: school.elevatorContractor,
+    school_type: school.schoolType,
+    source_data: school.sourceData
+  }))), {
+    totalSchools: 1,
+    elevatorCount: 1,
+    boysCount: 0,
+    girlsCount: 0,
+    neighborhoods: [{ name: 'غير محدد', count: 1 }]
+  });
+});
+
 test('preserves every school-sheet column, translates English headers, and retains coordinates', () => {
   const headers = [
     'ID', 'اسم الموقع', 'الرقم الوزاري', 'العنوان', 'زون', 'مجموعة', 'خط العرض', 'خط الطول',

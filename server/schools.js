@@ -16,21 +16,26 @@ function normalizeHeader(value) {
     .replace(/\s+/g, ' ');
 }
 
+function normalizeSchoolCategory(value) {
+  return normalizeHeader(String(value || '').replace(/\p{Cf}/gu, ''))
+    .replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+
+function isCountedSchoolBuilding(value) {
+  return ['مستقل', 'مشتركاساسي'].includes(normalizeSchoolCategory(value));
+}
+
 function summarizeSchools(schools) {
   const normalizeValue = (value) => normalizeHeader(value);
-  const normalizeCategory = (value) => normalizeValue(
-    String(value || '').normalize('NFKC').replace(/\p{Cf}/gu, '')
-  ).replace(/[\s\p{P}\p{S}]+/gu, '');
-  const isSchoolBuilding = (value) => ['مستقل', 'مشتركاساسي'].includes(normalizeCategory(value));
-  const eligibleSchools = schools.filter((school) => isSchoolBuilding(school.building_type));
+  const eligibleSchools = schools.filter((school) => isCountedSchoolBuilding(school.building_type));
   const neighborhoods = new Map();
   let elevatorCount = 0;
   let boysCount = 0;
   let girlsCount = 0;
 
   for (const school of eligibleSchools) {
-    const contractor = normalizeCategory(school.elevator_contractor);
-    if (contractor && !contractor.includes(normalizeCategory('لا ينطبق'))) elevatorCount += 1;
+    const contractor = normalizeSchoolCategory(school.elevator_contractor);
+    if (contractor && !contractor.includes(normalizeSchoolCategory('لا ينطبق'))) elevatorCount += 1;
 
     const gender = normalizeValue(school.school_type);
     if (gender.includes('بنين') || gender.includes('boys')) boysCount += 1;
@@ -170,7 +175,7 @@ function parseSchoolCsv(buffer) {
       value: String(record[index] || '').trim()
       };
     });
-    uniqueSchools.set(number, {
+    const school = {
       number,
       name,
       supervisor: valueFrom(record, supervisorColumns).slice(0, 150),
@@ -182,7 +187,11 @@ function parseSchoolCsv(buffer) {
       latitude: valueFrom(record, latitudeColumns),
       longitude: valueFrom(record, longitudeColumns),
       sourceData
-    });
+    };
+    const existing = uniqueSchools.get(number);
+    if (!existing || (!isCountedSchoolBuilding(existing.buildingType) && isCountedSchoolBuilding(school.buildingType))) {
+      uniqueSchools.set(number, school);
+    }
   }
   const schools = [...uniqueSchools.values()];
   if (!schools.length) throw new Error('لم يتم العثور على مدارس صالحة في الملف.');
