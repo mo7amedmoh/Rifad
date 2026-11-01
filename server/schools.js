@@ -96,6 +96,7 @@ function parseSchoolCsv(buffer) {
   const regionColumns = find(['المنطقة', 'الإدارة', 'region', 'area', 'العنوان', 'مكتب التعليم', 'الزون', 'زون', 'zone']);
   const schoolTypeColumns = find(['نوع المدرسة', 'نوع الموقع', 'school type', 'site type', 'gender', 'النوع', 'الجنس']);
   const buildingTypeColumns = find(['نوع المبنى', 'نوع المبني', 'building type', 'building_type']);
+  const elevatorContractorColumns = find(['مقاول المصاعد', 'مقاول المصعد', 'شركة المصاعد', 'مقاول صيانة المصاعد', 'elevator contractor']);
   const occupancySizeColumns = find(['حجم المبنى', 'حجم المدرسة', 'occupancy_size', 'occupancy size', 'حجم الإشغال', 'حجم الاشغال']);
   const latitudeColumns = find(['خط العرض', 'latitude', 'lat', 'الشماليات']);
   const longitudeColumns = find(['خط الطول', 'longitude', 'lon', 'lng', 'الشرقيات']);
@@ -135,6 +136,7 @@ function parseSchoolCsv(buffer) {
       region: valueFrom(record, regionColumns).slice(0, 250),
       schoolType: valueFrom(record, schoolTypeColumns).slice(0, 100),
       buildingType: valueFrom(record, buildingTypeColumns).slice(0, 100),
+      elevatorContractor: valueFrom(record, elevatorContractorColumns).slice(0, 150),
       occupancySize: valueFrom(record, occupancySizeColumns).slice(0, 100),
       latitude: valueFrom(record, latitudeColumns),
       longitude: valueFrom(record, longitudeColumns),

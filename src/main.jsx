@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { toBlob, toPng } from 'html-to-image';
+import ContractKpis from './ContractKpis';
 import {
   Activity, AlertCircle, AlertTriangle, ArrowDownToLine, ArrowLeft,
   Building2, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight,
@@ -47,6 +48,7 @@ function App() {
   const [toast, setToast] = useState('');
   const [mobileNav, setMobileNav] = useState(false);
   const [period, setPeriod] = useState('month');
+  const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
 
   const notify = useCallback((message) => {
     setToast(message);
@@ -124,8 +126,8 @@ function App() {
           <div className="topbar-actions"><div className="live-status"><span /> النظام يعمل بشكل طبيعي</div><div className="top-date"><CalendarDays size={16} />{formatDate(new Date(), { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</div></div>
         </header>
         <div className="page-content">
-          {currentPage === 'dashboard' && <Dashboard period={period} setPeriod={setPeriod} notify={notify} />}
-          {currentPage === 'analysis' && <Analysis notify={notify} />}
+          {currentPage === 'dashboard' && <Dashboard period={period} setPeriod={setPeriod} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} notify={notify} />}
+          {currentPage === 'analysis' && <Analysis period={period} setPeriod={setPeriod} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} session={session} csrf={csrf} notify={notify} />}
           {currentPage === 'tickets' && <Tickets session={session} csrf={csrf} notify={notify} />}
           {currentPage === 'schools' && <Schools csrf={csrf} session={session} notify={notify} />}
           {currentPage === 'account' && <AccountPage session={session} csrf={csrf} notify={notify} onUpdated={(data) => { setSession(data.user); setCsrf(data.csrfToken); }} />}
@@ -177,7 +179,41 @@ function PageHeading({ eyebrow, title, description, action }) {
   return <div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div>{action}</div>;
 }
 
-function Dashboard({ period, setPeriod, notify }) {
+function periodQuery(period, selectedMonth) {
+  const params = new URLSearchParams({ period });
+  if (period === 'month') params.set('month', selectedMonth);
+  return params.toString();
+}
+
+function periodLabel(period, selectedMonth) {
+  if (period === 'week') return 'آخر 7 أيام';
+  if (period === 'all') return 'جميع البلاغات المسجلة';
+  const month = /^\d{4}-(0[1-9]|1[0-2])$/.test(selectedMonth || '')
+    ? selectedMonth : new Date().toISOString().slice(0, 7);
+  const date = new Date(`${month}-01T12:00:00`);
+  return `شهر ${new Intl.DateTimeFormat('ar-SA', { month: 'long', year: 'numeric', timeZone: 'Asia/Riyadh' }).format(date)}`;
+}
+
+function PeriodControls({ period, setPeriod, selectedMonth, setSelectedMonth }) {
+  return <div className="period-controls">
+    <div className="segmented" aria-label="الفترة الزمنية">
+      <button className={period === 'week' ? 'selected' : ''} aria-pressed={period === 'week'} onClick={() => setPeriod('week')}>أسبوع</button>
+      <button className={period === 'month' ? 'selected' : ''} aria-pressed={period === 'month'} onClick={() => setPeriod('month')}>شهر</button>
+      <button className={period === 'all' ? 'selected' : ''} aria-pressed={period === 'all'} onClick={() => setPeriod('all')}>تراكمي</button>
+    </div>
+    <label className={`month-picker ${period !== 'month' ? 'month-picker-disabled' : ''}`}>
+      <CalendarDays size={15} />
+      <span className="visually-hidden">اختر شهر التحليل</span>
+      <input type="month" aria-label="اختر شهر التحليل" value={selectedMonth} disabled={period !== 'month'} max={new Date().toISOString().slice(0, 7)} onChange={(event) => {
+        if (!event.target.value) return;
+        setSelectedMonth(event.target.value);
+        setPeriod('month');
+      }} />
+    </label>
+  </div>;
+}
+
+function Dashboard({ period, setPeriod, selectedMonth, setSelectedMonth, notify }) {
   const [summary, setSummary] = useState(null);
   const [busy, setBusy] = useState(true);
   const [ticketView, setTicketView] = useState({ status: 'open', period });
@@ -188,13 +224,13 @@ function Dashboard({ period, setPeriod, notify }) {
   useEffect(() => {
     let active = true;
     const refresh = () => {
-      request(`/api/summary?period=${period}`).then((data) => { if (active) setSummary(data); }).catch((e) => notify(e.message)).finally(() => active && setBusy(false));
+      request(`/api/summary?${periodQuery(period, selectedMonth)}`).then((data) => { if (active) setSummary(data); }).catch((e) => notify(e.message)).finally(() => active && setBusy(false));
     };
     setBusy(true);
     refresh();
     const timer = window.setInterval(refresh, 60_000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [period, notify]);
+  }, [period, selectedMonth, notify]);
   const exportImage = async () => {
     try {
       const dataUrl = await toPng(reportRef.current, { pixelRatio: 2, backgroundColor: '#f5f7f8' });
@@ -211,12 +247,12 @@ function Dashboard({ period, setPeriod, notify }) {
     { title: 'البلاغات المخترقة', value: m.breached, icon: AlertTriangle, color: 'red', note: `${m.missingBreachReason || 0} دون سبب مسجل`, status: 'breached' }
   ];
   return <div ref={reportRef} className="report-surface">
-    <PageHeading eyebrow="نظرة عامة" title="لوحة التحكم" description="تابع حالة البلاغات ومؤشرات الالتزام من مكان واحد." action={<div className="heading-actions"><div className="segmented"><button className={period === 'week' ? 'selected' : ''} onClick={() => setPeriod('week')}>أسبوع</button><button className={period === 'month' ? 'selected' : ''} onClick={() => setPeriod('month')}>شهر</button><button className={period === 'all' ? 'selected' : ''} onClick={() => setPeriod('all')}>تراكمي</button></div><button className="btn btn-outline" onClick={() => exportImage(true)}><ArrowDownToLine size={16} />تنزيل التقرير</button></div>} />
-    <div className="period-note"><CalendarDays size={15} />{period === 'week' ? 'آخر 7 أيام' : period === 'month' ? 'الشهر الحالي حتى الآن' : 'جميع البلاغات المسجلة'} <span>•</span> القياس حسب تاريخ الإنشاء والحالة الحالية</div>
+    <PageHeading eyebrow="نظرة عامة" title="لوحة التحكم" description="تابع حالة البلاغات ومؤشرات الالتزام من مكان واحد." action={<div className="heading-actions"><PeriodControls period={period} setPeriod={setPeriod} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} /><button className="btn btn-outline" onClick={() => exportImage(true)}><ArrowDownToLine size={16} />تنزيل التقرير</button></div>} />
+    <div className="period-note"><CalendarDays size={15} />{periodLabel(period, selectedMonth)} <span>•</span> القياس حسب تاريخ الإنشاء والحالة الحالية</div>
     <section className="metric-grid">
       {stats.map((metric, index) => <DashboardMetricCard key={metric.title} metric={metric} index={index} selected={ticketView.period !== null && ticketView.status === metric.status && ticketView.period === period} onClick={() => setTicketView({ status: metric.status, period })} />)}
     </section>
-    <OpenTicketsSection notify={notify} period={period} view={ticketView} />
+    <OpenTicketsSection notify={notify} selectedMonth={selectedMonth} view={ticketView} />
     <SlaAlerts items={summary?.approachingSlaTickets || []} count={summary?.approachingSla || 0} />
     <PriorityAlerts items={summary?.priorityAlerts || []} count={summary?.priorityAlertCount || 0} />
     <SupervisorPerformance rows={summary?.supervisorPerformance || []} best={summary?.bestSupervisor} />
@@ -242,21 +278,23 @@ function PriorityAlerts({ items, count }) {
     {items.length ? <div className="sla-alert-list">{items.map((ticket) => <div className="sla-alert-row" key={ticket.id}><span className="sla-alert-icon"><AlertTriangle size={16} /></span><div><strong>{ticket.school_name || ticket.building_name || 'مدرسة غير محددة'}</strong><small>{ticket.case_id} · {ticket.alertLabel} · الحالية: {ticket.currentPriority || 'غير محددة'} · المقترحة: {ticket.expectedPriority} — {ticket.expectedLabel}</small><small>{ticket.reason} · زمن المعالجة المقترح في المصفوفة: {fmt.format(ticket.resolutionHours)} ساعة</small></div></div>)}</div> : <div className="sla-alert-empty"><CheckCircle2 size={17} />لا توجد توصيات لتصحيح الأولوية ضمن الفترة المحددة.</div>}
   </section>;
 }
-function OpenTicketsSection({ notify, period, view }) {
+function OpenTicketsSection({ notify, selectedMonth, view }) {
   const [data, setData] = useState({ items: [], total: 0, truncated: false, filters: { supervisors: [], layers: [], regions: [] } });
   const [filters, setFilters] = useState({ supervisor: '', layer: '', region: '' });
   const [busy, setBusy] = useState(true);
   const exportRef = useRef(null);
+  const queryPeriod = view.status === 'open' ? null : view.period;
   useEffect(() => {
     let active = true;
     setBusy(true);
-    const params = new URLSearchParams({ ...filters, status: view.status, ...(view.period ? { period: view.period } : {}) });
+    const params = new URLSearchParams({ ...filters, status: view.status, ...(queryPeriod ? { period: queryPeriod } : {}) });
+    if (queryPeriod === 'month') params.set('month', selectedMonth);
     request(`/api/open-tickets?${params}`)
       .then((result) => { if (active) setData(result); })
       .catch((error) => { if (active) notify(error.message); })
       .finally(() => { if (active) setBusy(false); });
     return () => { active = false; };
-  }, [filters, notify, view]);
+  }, [filters, notify, queryPeriod, selectedMonth, view.status]);
 
   const exportForSharing = async (downloadOnly = false) => {
     let captureNode;
@@ -308,7 +346,7 @@ function OpenTicketsSection({ notify, period, view }) {
       <div className="heading-actions"><button className="btn btn-primary" onClick={() => exportForSharing(true)} disabled={busy}><ArrowDownToLine size={16} />تنزيل الصورة</button><button className="btn btn-outline" onClick={() => exportForSharing(false)} disabled={busy}><Share2 size={16} />مشاركة</button></div>
     </div>
     <div className="open-ticket-filters">
-      <span className="open-count"><Clock3 size={15} />{busy ? 'جارٍ التحديث…' : `${fmt.format(data.total)} ${view.status === 'breached' ? 'بلاغ مخترق' : 'بلاغ مفتوح'}${view.period ? ` · ${periodLabel(view.period)}` : ''}`}</span>
+      <span className="open-count"><Clock3 size={15} />{busy ? 'جارٍ التحديث…' : `${fmt.format(data.total)} ${view.status === 'breached' ? 'بلاغ مخترق' : 'بلاغ مفتوح'}${queryPeriod ? ` · ${periodLabel(queryPeriod, selectedMonth)}` : ''}`}</span>
       <label><span>المشرف</span><select aria-label="فلترة حسب المشرف" value={filters.supervisor} onChange={(event) => setFilters({ ...filters, supervisor: event.target.value })}><option value="">كل المشرفين</option>{data.filters.supervisors.map((name) => <option key={name}>{name}</option>)}</select></label>
       <label><span>الطبقة</span><select aria-label="فلترة حسب الطبقة" value={filters.layer} onChange={(event) => setFilters({ ...filters, layer: event.target.value })}><option value="">كل الطبقات</option>{data.filters.layers.map((name) => <option key={name}>{name}</option>)}</select></label>
       <label><span>المنطقة</span><select aria-label="فلترة حسب المنطقة" value={filters.region} onChange={(event) => setFilters({ ...filters, region: event.target.value })}><option value="">كل المناطق</option>{data.filters.regions.map((name) => <option key={name}>{name}</option>)}</select></label>
@@ -318,7 +356,7 @@ function OpenTicketsSection({ notify, period, view }) {
     <div className="open-share-canvas" ref={exportRef} aria-hidden="true">
       <div className="open-share-sheet">
         <div className="share-brand-row"><div className="share-brand-mark"><Activity size={21} /></div><div><strong>رِفاد</strong><span>إدارة البلاغات المدرسية</span></div><time>{formatDate(new Date(), { day: 'numeric', month: 'long', year: 'numeric' })}</time></div>
-        <div className="share-report-title"><div><h2>{view.status === 'breached' ? 'البلاغات المخترقة' : 'البلاغات المفتوحة حاليًا'}</h2><p>{filters.supervisor || 'كل المشرفين'} · {filters.layer || 'كل الطبقات'} · {filters.region || 'كل المناطق'} · {view.period ? periodLabel(view.period) : 'كل الفترات'}</p></div><strong>{fmt.format(data.total)} <small>بلاغ</small></strong></div>
+        <div className="share-report-title"><div><h2>{view.status === 'breached' ? 'البلاغات المخترقة' : 'البلاغات المفتوحة حاليًا'}</h2><p>{filters.supervisor || 'كل المشرفين'} · {filters.layer || 'كل الطبقات'} · {filters.region || 'كل المناطق'} · {queryPeriod ? periodLabel(queryPeriod, selectedMonth) : 'كل الفترات'}</p></div><strong>{fmt.format(data.total)} <small>بلاغ</small></strong></div>
         <OpenTicketsTable items={data.items} busy={busy} />
         {data.truncated && <p className="share-truncated">المعروض أول {fmt.format(data.items.length)} بلاغ من الإجمالي.</p>}
         <div className="share-footer">رِفاد · Shalfa <span>•</span> © Mohamed Elshenawy</div>
@@ -362,16 +400,15 @@ function durationText(minutes) {
   return `${fmt.format(Math.floor(minutes / 1440))} يوم و${fmt.format(Math.floor((minutes % 1440) / 60))} ساعة`;
 }
 
-function Analysis({ notify }) {
-  const [period, setPeriod] = useState('month');
+function Analysis({ period, setPeriod, selectedMonth, setSelectedMonth, session, csrf, notify }) {
   const [summary, setSummary] = useState(null);
   const [exporting, setExporting] = useState(false);
   const reportRef = useRef(null);
   useEffect(() => {
     let active = true;
-    request(`/api/summary?period=${period}`).then((data) => { if (active) setSummary(data); }).catch((e) => notify(e.message));
+    request(`/api/summary?${periodQuery(period, selectedMonth)}`).then((data) => { if (active) setSummary(data); }).catch((e) => notify(e.message));
     return () => { active = false; };
-  }, [period, notify]);
+  }, [period, selectedMonth, notify]);
   const m = summary?.metrics || {};
   const exportImage = async (downloadOnly = false) => {
     setExporting(true);
@@ -418,9 +455,9 @@ function Analysis({ notify }) {
     }
   };
   return <div className="analysis-page">
-    <PageHeading eyebrow="تحليلات الأداء" title="دراسة وتحليلات" description="قراءة توزيع البلاغات ومؤشرات الالتزام حسب الفترة." action={<div className="analysis-heading-actions"><div className="segmented"><button className={period === 'week' ? 'selected' : ''} onClick={() => setPeriod('week')}>أسبوع</button><button className={period === 'month' ? 'selected' : ''} onClick={() => setPeriod('month')}>شهر</button><button className={period === 'all' ? 'selected' : ''} onClick={() => setPeriod('all')}>تراكمي</button></div><button className="btn btn-primary" onClick={() => exportImage(true)} disabled={exporting}><ArrowDownToLine size={16} />تنزيل PNG</button><button className="btn btn-outline" onClick={() => exportImage(false)} disabled={exporting}><Share2 size={16} />{exporting ? 'جارٍ التجهيز…' : 'مشاركة'}</button></div>} />
+    <PageHeading eyebrow="تحليلات الأداء" title="دراسة وتحليلات" description="قراءة توزيع البلاغات ومؤشرات الالتزام حسب الفترة." action={<div className="analysis-heading-actions"><PeriodControls period={period} setPeriod={setPeriod} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} /><button className="btn btn-primary" onClick={() => exportImage(true)} disabled={exporting}><ArrowDownToLine size={16} />تنزيل PNG</button><button className="btn btn-outline" onClick={() => exportImage(false)} disabled={exporting}><Share2 size={16} />{exporting ? 'جارٍ التجهيز…' : 'مشاركة'}</button></div>} />
     <div className="analysis-report" ref={reportRef}>
-      <div className="analysis-report-brand"><Activity size={20} /><div><strong>رِفاد · دراسة وتحليلات</strong><span>{periodLabel(period)} · {formatDate(new Date(), { day: 'numeric', month: 'long', year: 'numeric' })}</span></div></div>
+      <div className="analysis-report-brand"><Activity size={20} /><div><strong>رِفاد · دراسة وتحليلات</strong><span>{periodLabel(period, selectedMonth)} · {formatDate(new Date(), { day: 'numeric', month: 'long', year: 'numeric' })}</span></div></div>
       <div className="analysis-callout"><Activity size={18} /><div><strong>مؤشر الالتزام للفترة</strong><span>البلاغات غير المخترقة ÷ إجمالي البلاغات غير الملغاة المنشأة خلال الفترة.</span></div><b>{fmt.format(m.compliance || 0)}%</b></div>
       <div className="analysis-metrics"><MiniMetric title="إجمالي البلاغات" value={m.total} icon={ClipboardList} /><MiniMetric title="مفتوحة" value={m.open} icon={Clock3} /><MiniMetric title="مغلقة" value={m.closed} icon={CheckCircle2} /><MiniMetric title="مخترقة" value={m.breached} icon={AlertTriangle} /></div>
       <div className="panel chart-panel monthly-compliance-panel"><div className="panel-heading"><div><h2>مقارنة الالتزام الشهري بـ SLA</h2><p>نسبة البلاغات غير المخترقة من البلاغات غير الملغاة لكل شهر (آخر 12 شهرًا)</p></div></div><MonthlyComplianceChart rows={summary?.monthlyCompliance || []} /></div>
@@ -434,13 +471,11 @@ function Analysis({ notify }) {
         <section className="panel chart-panel"><div className="panel-heading"><div><h2>البلاغات المخترقة حسب الطبقة</h2><p>عدد البلاغات المخترقة لكل تصنيف</p></div></div><BreachBreakdownList rows={summary?.breachedByLayer || []} empty="لا توجد بلاغات مخترقة في الفترة." /></section>
         <section className="panel chart-panel"><div className="panel-heading"><div><h2>البلاغات المخترقة حسب اليوم</h2><p>تاريخ إنشاء البلاغات المخترقة ضمن الفترة</p></div></div><BreachBreakdownList rows={summary?.breachedByDay || []} empty="لا توجد بلاغات مخترقة في الفترة." /></section>
       </div>
+      <ContractKpis request={request} csrf={csrf} isAdmin={session.role === 'admin'} canEditResults={session.role !== 'viewer'} notify={notify} />
       <div className="data-footnote"><AlertCircle size={15} />تُحتسب التحليلات للمدارس المطابقة بالرقم الوزاري أو باسم مدرسة فريد. يعبّر الالتزام الشهري عن الحالة الحالية لبلاغات كل شهر.</div>
       <div className="analysis-report-footer">رِفاد · Shalfa · © Mohamed Elshenawy · Internal Private</div>
     </div>
   </div>;
-}
-function periodLabel(period) {
-  return period === 'week' ? 'آخر 7 أيام' : period === 'month' ? 'الشهر الحالي' : 'تراكمي';
 }
 function CompliancePanel({ metrics }) {
   return <section className="panel compliance-panel">

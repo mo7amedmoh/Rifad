@@ -41,6 +41,13 @@ test('reads the published P, T, and V school attributes by their source headers'
   assert.equal(school.occupancySize, '350');
 });
 
+test('reads elevator contractor from its named sheet column', () => {
+  const [school] = parseSchoolCsv(Buffer.from(
+    'الرقم الوزاري,اسم الموقع,نوع المبنى,مقاول المصاعد\n123456,مدرسة تجريبية,مستقل,شركة المصاعد\n'
+  ));
+  assert.equal(school.elevatorContractor, 'شركة المصاعد');
+});
+
 test('preserves every school-sheet column, translates English headers, and retains coordinates', () => {
   const headers = [
     'ID', 'اسم الموقع', 'الرقم الوزاري', 'العنوان', 'زون', 'مجموعة', 'خط العرض', 'خط الطول',

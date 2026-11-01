@@ -58,6 +58,22 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
   assert.equal(initialSettings.priorityMatrixEnabled, false);
   assert.equal(initialSettings.priorityOverAlertEnabled, true);
   assert.equal(initialSettings.priorityUnderAlertEnabled, false);
+  const contractConfigResponse = await fetch(`${base}/api/contract-kpis/config`, { headers: { Cookie: cookie } });
+  const contractConfig = await contractConfigResponse.json();
+  assert.equal(contractConfigResponse.status, 200);
+  assert.equal(contractConfig.kpis.length, 36);
+  assert.equal(contractConfig.payoutTable.length, 35);
+  assert.deepEqual(contractConfig.settings, {
+    contractStartDate: '2026-07-01',
+    accountabilityStart: '2026-10-01',
+    monthlyInvoiceValue: 0
+  });
+  const manualKpiResultResponse = await fetch(`${base}/api/contract-kpis/results`, {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'X-CSRF-Token': authData.csrfToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ month: '2026-10', results: [{ kpiCode: 'CM.1', achievedPct: 80, fineCount: 2 }] })
+  });
+  assert.equal(manualKpiResultResponse.status, 200);
 
   const createdAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   const csv = [
@@ -412,6 +428,20 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
   assert.equal((await weeklySummaryResponse.json()).metrics.total, 3);
   const weeklyOpenResponse = await fetch(`${base}/api/open-tickets?status=open&period=week`, { headers: { Cookie: cookie } });
   assert.equal((await weeklyOpenResponse.json()).total, 2);
+  db.prepare('UPDATE tickets SET created_at = ? WHERE case_id = ?')
+    .run('2024-11-15T12:00:00.000Z', 'CASE-TEST-1');
+  db.prepare('UPDATE tickets SET created_at = ? WHERE case_id = ?')
+    .run('2024-12-15T12:00:00.000Z', 'CASE-MEDIUM-1');
+  const selectedMonthSummaryResponse = await fetch(`${base}/api/summary?period=month&month=2024-11`, { headers: { Cookie: cookie } });
+  const selectedMonthSummary = await selectedMonthSummaryResponse.json();
+  assert.equal(selectedMonthSummary.selectedMonth, '2024-11');
+  assert.equal(selectedMonthSummary.metrics.total, 1);
+  const selectedMonthOpenResponse = await fetch(`${base}/api/open-tickets?status=open&period=month&month=2024-11`, { headers: { Cookie: cookie } });
+  const selectedMonthOpen = await selectedMonthOpenResponse.json();
+  assert.equal(selectedMonthOpen.total, 1);
+  assert.equal(selectedMonthOpen.items[0].case_id, 'CASE-TEST-1');
+  db.prepare('UPDATE tickets SET created_at = ? WHERE case_id = ?').run(createdAt, 'CASE-TEST-1');
+  db.prepare('UPDATE tickets SET created_at = ? WHERE case_id = ?').run(mediumCreatedAt, 'CASE-MEDIUM-1');
 
   const invalidCurrentPassword = await fetch(`${base}/api/account`, {
     method: 'PUT',
@@ -575,6 +605,58 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM schools').get().count, 0);
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM tickets').get().count, ticketCountBeforeDeleteAll);
     assert.ok(db.prepare('SELECT COUNT(*) AS count FROM school_change_log').get().count > 0);
+
+    const contractSchoolsImport = await nativeFetch(`${base}/api/schools/import`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'X-CSRF-Token': updatedSessionData.csrfToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ csv: [
+        'رقم المدرسة,اسم المدرسة,نوع المبنى,مقاول المصاعد,الشماليات,الشرقيات',
+        '300001,مدرسة أم,مستقل,شركة المصاعد,46.70000,24.70000',
+        '300002,مدرسة أم ثانية,مشترك أساسي,لا ينطبق,46.70020,24.70020',
+        '300003,مدرسة ملحقة,مشترك ملحق,لا ينطبق,46.70001,24.70001'
+      ].join('\n') })
+    });
+    assert.equal(contractSchoolsImport.status, 200);
+    const contractSchoolRows = db.prepare(`SELECT school_number, counts_in_kpi, has_elevator, parent_school_id
+      FROM schools ORDER BY school_number`).all().map((row) => ({ ...row }));
+    assert.deepEqual(contractSchoolRows, [
+      { school_number: '300001', counts_in_kpi: 1, has_elevator: 1, parent_school_id: null },
+      { school_number: '300002', counts_in_kpi: 1, has_elevator: 0, parent_school_id: null },
+      { school_number: '300003', counts_in_kpi: 0, has_elevator: 0, parent_school_id: '300001' }
+    ]);
+    const attachedReportImport = await nativeFetch(`${base}/api/import/tickets`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'X-CSRF-Token': updatedSessionData.csrfToken, 'Content-Type': 'text/csv' },
+      body: [
+        '"مُعرّف الحالة","الأولوية","الحالة","تاريخ الإنشاء","حالة SLM","الوصف","الطبقة 3 للفئة","رقم المدرسة","اسم المبنى"',
+        '"CASE-ATTACHED-KPI","حرج","مفتوح","2026-10-15T12:00:00.000Z","ضمن المهلة","إصلاح تمديدات","بلاغات صيانة الاعمال الكهربائية","300003","مدرسة ملحقة"'
+      ].join('\n')
+    });
+    assert.equal(attachedReportImport.status, 200);
+    const contractMonthResponse = await nativeFetch(`${base}/api/contract-kpis/month?month=2026-10`, { headers: { Cookie: cookie } });
+    assert.equal(contractMonthResponse.status, 200);
+    const contractMonth = await contractMonthResponse.json();
+    assert.equal(contractMonth.indicators['HS.9'].eligible_schools, 1);
+    assert.equal(contractMonth.indicators['HS.9'].denominator, 2);
+    assert.equal(contractMonth.indicators['HS.5'].reports, 1);
+    assert.equal(contractMonth.indicators['CM.1'].achieved_pct, 80);
+    assert.equal(contractMonth.indicators['CM.1'].missing, false);
+    assert.deepEqual(contractMonth.reportsBySchool[0], {
+      kpiCode: 'HS.5',
+      schoolNumber: '300001',
+      schoolName: 'مدرسة أم',
+      reports: 1
+    });
+    const attachedOverrideResponse = await nativeFetch(`${base}/api/contract-kpis/attached-override`, {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'X-CSRF-Token': updatedSessionData.csrfToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ attachedSchoolNumber: '300003', parentSchoolNumber: '300002' })
+    });
+    assert.equal(attachedOverrideResponse.status, 200);
+    assert.equal(db.prepare('SELECT parent_school_id FROM schools WHERE school_number = ?').get('300003').parent_school_id, '300002');
+    const contractProjectionResponse = await nativeFetch(`${base}/api/contract-kpis/project?today=2026-10-15`, { headers: { Cookie: cookie } });
+    assert.equal(contractProjectionResponse.status, 200);
+    assert.deepEqual(Object.keys((await contractProjectionResponse.json()).scenarios).sort(), ['best', 'pace', 'worst']);
   } finally {
     global.fetch = nativeFetch;
   }

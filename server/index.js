@@ -20,6 +20,13 @@ const {
   fetchSchoolCsv
 } = require('./schools');
 const { getPriorityAssessment } = require('./priority-matrix');
+const {
+  normalizeText: normalizeKpiText,
+  findNearestParent
+} = require('./contract-kpis');
+const { isBreached, isClosed, isCancelled, isOpen, calculateCompliance } = require('./ticket-status');
+const { createContractKpiService } = require('./contract-kpi-service');
+const contractKpiService = createContractKpiService(db);
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -30,6 +37,14 @@ const setupTokenConfigured = typeof initialAdminSetupToken === 'string' &&
   initialAdminSetupToken.length >= 32 && initialAdminSetupToken.length <= 256;
 if (production && (!sessionSecret || sessionSecret.length < 32)) {
   throw new Error('SESSION_SECRET must contain at least 32 characters in production.');
+}
+function isDateOnly(value) {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+const countedBuildingTypes = new Set(['مستقل', 'مشترك أساسي'].map(normalizeKpiText));
+function countsInContractKpi(buildingType) {
+  return countedBuildingTypes.has(normalizeKpiText(buildingType));
 }
 app.disable('x-powered-by');
 if (production) app.set('trust proxy', 1);
@@ -168,18 +183,6 @@ function slaRemainingMinutes(ticket, slaSettings, now = Date.now()) {
   if (Number.isFinite(dueAt)) return Math.ceil((dueAt - now) / 60_000);
   return ticket.sla_remaining_minutes;
 }
-function isBreached(ticket) {
-  return /تم اختراقه|مخترق|breached|violated/i.test(ticket.slm_status);
-}
-function isClosed(ticket) {
-  return /مغلق|تم حل|محلول|closed|resolved/i.test(ticket.status);
-}
-function isCancelled(ticket) {
-  return /ملغى|ملغي|cancelled|canceled/i.test(ticket.status.trim());
-}
-function isOpen(ticket) {
-  return !isClosed(ticket) && !isCancelled(ticket);
-}
 app.use('/api', (req, res, next) => {
   const origin = req.get('origin');
   const allowedOrigin = process.env.APP_ORIGIN || (production ? `${req.protocol}://${req.get('host')}` : 'http://127.0.0.1:5173');
@@ -296,11 +299,22 @@ app.get('/api/summary', requireRole(...roles), (req, res) => {
   const slaSettings = getSlaSettings();
   const now = new Date();
   const period = req.query.period === 'week' ? 'week' : req.query.period === 'month' ? 'month' : 'all';
-  const dateCutoff = period === 'week'
-    ? new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString()
-    : period === 'month' ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString() : null;
-  const dateFilter = dateCutoff ? ' AND t.created_at >= ?' : '';
-  const tickets = db.prepare(`SELECT t.*, s.name AS school_name, s.supervisor, s.region FROM tickets t JOIN schools s ON s.school_number = t.matched_school_number WHERE t.deleted_at IS NULL${dateFilter} ORDER BY t.created_at DESC`).all(...(dateCutoff ? [dateCutoff] : []));
+  const requestedMonth = String(req.query.month || '');
+  const selectedMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(requestedMonth)
+    ? requestedMonth : now.toISOString().slice(0, 7);
+  const monthStart = new Date(`${selectedMonth}-01T00:00:00.000Z`);
+  const monthEnd = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 1));
+  const periodConditions = [];
+  const periodParams = [];
+  if (period === 'week') {
+    periodConditions.push('t.created_at >= ?');
+    periodParams.push(new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString());
+  } else if (period === 'month') {
+    periodConditions.push('t.created_at >= ?', 't.created_at < ?');
+    periodParams.push(monthStart.toISOString(), monthEnd.toISOString());
+  }
+  const dateFilter = periodConditions.length ? ` AND ${periodConditions.join(' AND ')}` : '';
+  const tickets = db.prepare(`SELECT t.*, s.name AS school_name, s.supervisor, s.region FROM tickets t JOIN schools s ON s.school_number = t.matched_school_number WHERE t.deleted_at IS NULL${dateFilter} ORDER BY t.created_at DESC`).all(...periodParams);
   const activeTickets = tickets
     .filter(isOpen)
     .map((ticket) => ({ ...ticket, sla_remaining_minutes: slaRemainingMinutes(ticket, slaSettings) }));
@@ -323,7 +337,8 @@ app.get('/api/summary', requireRole(...roles), (req, res) => {
   const eligible = tickets.filter((ticket) => !isCancelled(ticket));
   const breached = eligible.filter(isBreached);
   const closed = eligible.filter(isClosed);
-  const onTime = eligible.length - breached.length;
+  const compliance = calculateCompliance(tickets);
+  const onTime = compliance.reports;
   const by = (key) => {
     const result = new Map();
     for (const ticket of tickets) {
@@ -454,6 +469,7 @@ app.get('/api/summary', requireRole(...roles), (req, res) => {
   });
   res.json({
     period,
+    selectedMonth: period === 'month' ? selectedMonth : null,
     metrics: {
       total: tickets.length,
       open: activeTickets.length,
@@ -465,11 +481,11 @@ app.get('/api/summary', requireRole(...roles), (req, res) => {
       overdueOpen,
       dueSoonOpen,
       missingSlaOpen,
-      compliance: eligible.length ? Math.round((onTime / eligible.length) * 1000) / 10 : 0,
+      compliance: compliance.achievedPct,
       cumulative: db.prepare("SELECT COUNT(*) AS count FROM tickets t JOIN schools s ON s.school_number = t.matched_school_number WHERE t.deleted_at IS NULL").get().count,
       cumulativeCompliance: (() => {
-        const all = db.prepare("SELECT t.slm_status, t.status FROM tickets t JOIN schools s ON s.school_number = t.matched_school_number WHERE t.deleted_at IS NULL AND t.status NOT LIKE '%لغى%'").all();
-        return all.length ? Math.round((all.filter((x) => !/تم اختراقه|مخترق|breached|violated/i.test(x.slm_status)).length / all.length) * 1000) / 10 : 0;
+        const all = db.prepare("SELECT t.slm_status, t.status FROM tickets t JOIN schools s ON s.school_number = t.matched_school_number WHERE t.deleted_at IS NULL").all();
+        return calculateCompliance(all).achievedPct;
       })(),
       missingBreachReason: breachedWithoutReason.length
     },
@@ -492,6 +508,9 @@ app.get('/api/open-tickets', requireRole(...roles), (req, res) => {
   const slaSettings = getSlaSettings();
   const statusFilter = req.query.status === 'breached' ? 'breached' : 'open';
   const period = ['week', 'month'].includes(req.query.period) ? req.query.period : 'all';
+  const requestedMonth = String(req.query.month || '');
+  const selectedMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(requestedMonth)
+    ? requestedMonth : new Date().toISOString().slice(0, 7);
   const supervisor = String(req.query.supervisor || '').trim().slice(0, 150);
   const layer = String(req.query.layer || '').trim().slice(0, 180);
   const region = String(req.query.region || '').trim().slice(0, 150);
@@ -502,9 +521,7 @@ app.get('/api/open-tickets', requireRole(...roles), (req, res) => {
   const filteredPeriod = tickets.filter((ticket) => {
     if (period === 'week') return Date.parse(ticket.created_at) >= Date.now() - 7 * 24 * 60 * 60 * 1000;
     if (period === 'month') {
-      const created = new Date(ticket.created_at);
-      const now = new Date();
-      return created.getUTCFullYear() === now.getUTCFullYear() && created.getUTCMonth() === now.getUTCMonth();
+      return typeof ticket.created_at === 'string' && ticket.created_at.slice(0, 7) === selectedMonth;
     }
     return true;
   });
@@ -644,7 +661,8 @@ app.get('/api/schools', requireRole(...roles), (req, res) => {
   const like = `%${q}%`;
   const normalizedNumber = schoolNumberKey(normalizeSchoolNumber(q));
   const numberLike = normalizedNumber ? `%${normalizedNumber}%` : like;
-  const items = db.prepare(`SELECT school_number, name, supervisor, region, school_type, building_type, occupancy_size, updated_at FROM schools
+  const items = db.prepare(`SELECT school_number, name, supervisor, region, school_type, building_type, occupancy_size,
+      counts_in_kpi, has_elevator, parent_school_id, elevator_contractor, updated_at FROM schools
     WHERE ? = '' OR school_number LIKE ? OR (? <> '' AND school_number LIKE ?)
       OR name LIKE ? OR supervisor LIKE ? ORDER BY name LIMIT 500`)
     .all(q, like, normalizedNumber, numberLike, like, like);
@@ -672,7 +690,9 @@ app.post('/api/schools', requireRole('admin', 'receiver'), (req, res) => {
     region: z.string().trim().max(250).optional().default(''),
     schoolType: z.string().trim().max(100).optional().default(''),
     buildingType: z.string().trim().max(100).optional().default(''),
-    occupancySize: z.string().trim().max(100).optional().default('')
+    occupancySize: z.string().trim().max(100).optional().default(''),
+    elevatorContractor: z.string().trim().max(150).optional().default(''),
+    hasElevator: z.boolean().optional()
   }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'أدخل رقم المدرسة واسمها وتحقق من بقية البيانات.' });
 
@@ -689,7 +709,9 @@ app.post('/api/schools', requireRole('admin', 'receiver'), (req, res) => {
       region: parsed.data.region,
       schoolType: parsed.data.schoolType,
       buildingType: parsed.data.buildingType,
-      occupancySize: parsed.data.occupancySize
+      occupancySize: parsed.data.occupancySize,
+      elevatorContractor: parsed.data.elevatorContractor,
+      hasElevator: parsed.data.hasElevator
     }], req.user.id, 'manual');
   } catch (error) {
     if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
@@ -703,6 +725,7 @@ app.post('/api/schools', requireRole('admin', 'receiver'), (req, res) => {
 app.delete('/api/schools', requireRole('admin'), (req, res) => {
   const count = db.prepare('SELECT COUNT(*) AS count FROM schools').get().count;
   db.transaction(() => {
+    db.prepare('DELETE FROM attached_override').run();
     db.prepare('DELETE FROM schools').run();
     audit(req.user.id, 'delete-all', 'schools', count);
   })();
@@ -710,8 +733,16 @@ app.delete('/api/schools', requireRole('admin'), (req, res) => {
 });
 app.delete('/api/schools/:schoolNumber', requireRole('admin'), (req, res) => {
   const schoolNumber = normalizeSchoolNumber(req.params.schoolNumber);
-  const result = db.prepare('DELETE FROM schools WHERE school_number = ?').run(schoolNumber);
-  if (!result.changes) return res.status(404).json({ error: 'المدرسة غير موجودة.' });
+  const result = db.transaction(() => {
+    const deleted = db.prepare('DELETE FROM schools WHERE school_number = ?').run(schoolNumber);
+    if (!deleted.changes) return 0;
+    db.prepare('DELETE FROM attached_override WHERE attached_school_number = ? OR parent_school_number = ?')
+      .run(schoolNumber, schoolNumber);
+    db.prepare('UPDATE schools SET parent_school_id = NULL WHERE parent_school_id = ?').run(schoolNumber);
+    return deleted.changes;
+  })();
+  if (!result) return res.status(404).json({ error: 'المدرسة غير موجودة.' });
+  refreshAttachedSchoolParents();
   audit(req.user.id, 'delete', 'school', schoolNumber);
   res.json({ ok: true, message: 'حُذفت المدرسة من الدليل مع الاحتفاظ بالبلاغات وسجل التغييرات.' });
 });
@@ -834,6 +865,232 @@ app.get('/api/schools/:schoolNumber/history', requireRole(...roles), (req, res) 
     .map(({ changes, ...item }) => ({ ...item, changes: JSON.parse(changes) }));
   res.json({ items, limited: items.length === 100 });
 });
+app.get('/api/contract-kpis/month', requireRole(...roles), (req, res) => {
+  try {
+    res.json(contractKpiService.computeMonth(String(req.query.month || '')));
+  } catch (error) {
+    if (/صيغة الشهر/.test(error.message)) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+});
+app.get('/api/contract-kpis/project', requireRole(...roles), (req, res) => {
+  try {
+    res.json(contractKpiService.projectMonth(req.query.today || new Date()));
+  } catch (error) {
+    if (/تاريخ اليوم/.test(error.message)) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+});
+app.get('/api/contract-kpis/attached-unlinked', requireRole('admin'), (req, res) => {
+  const items = db.prepare(`SELECT school_number, name, building_type
+    FROM schools WHERE parent_school_id IS NULL ORDER BY name`).all()
+    .filter((school) => normalizeKpiText(school.building_type) === normalizeKpiText('مشترك ملحق'));
+  res.json({ items });
+});
+app.put('/api/contract-kpis/attached-override', requireRole('admin'), (req, res) => {
+  const parsed = z.object({
+    attachedSchoolNumber: z.string().trim().min(1).max(50),
+    parentSchoolNumber: z.string().trim().min(1).max(50)
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'أدخل رقمي المدرسة الملحقة والمدرسة الأم.' });
+  const attachedNumber = normalizeSchoolNumber(parsed.data.attachedSchoolNumber);
+  const parentNumber = normalizeSchoolNumber(parsed.data.parentSchoolNumber);
+  const attached = db.prepare('SELECT building_type FROM schools WHERE school_number = ?').get(attachedNumber);
+  const parent = db.prepare('SELECT counts_in_kpi FROM schools WHERE school_number = ?').get(parentNumber);
+  if (!attached || normalizeKpiText(attached.building_type) !== normalizeKpiText('مشترك ملحق')) {
+    return res.status(404).json({ error: 'المدرسة المحددة ليست مدرسة ملحقة مسجلة.' });
+  }
+  if (!parent || !parent.counts_in_kpi || attachedNumber === parentNumber) {
+    return res.status(400).json({ error: 'اختر مدرسة أم محسوبة في مؤشرات العقد.' });
+  }
+  db.prepare(`INSERT INTO attached_override (attached_school_number, parent_school_number)
+    VALUES (?, ?) ON CONFLICT(attached_school_number) DO UPDATE SET
+    parent_school_number=excluded.parent_school_number, updated_at=CURRENT_TIMESTAMP`).run(attachedNumber, parentNumber);
+  refreshAttachedSchoolParents();
+  audit(req.user.id, 'link', 'attached-school', `${attachedNumber}:${parentNumber}`);
+  res.json({ ok: true, attachedSchoolNumber: attachedNumber, parentSchoolNumber: parentNumber });
+});
+app.delete('/api/contract-kpis/attached-override/:schoolNumber', requireRole('admin'), (req, res) => {
+  const attachedNumber = normalizeSchoolNumber(req.params.schoolNumber);
+  const result = db.prepare('DELETE FROM attached_override WHERE attached_school_number = ?').run(attachedNumber);
+  if (!result.changes) return res.status(404).json({ error: 'لا يوجد ربط يدوي لهذه المدرسة.' });
+  refreshAttachedSchoolParents();
+  audit(req.user.id, 'unlink-override', 'attached-school', attachedNumber);
+  res.json({ ok: true });
+});
+app.patch('/api/tickets/:id/kpi', requireRole('admin'), (req, res) => {
+  const parsed = z.object({
+    excludedFromKpi: z.boolean().optional(),
+    exclusionReason: z.string().trim().max(500).optional(),
+    kpiOverride: z.string().trim().max(20).nullable().optional()
+  }).refine((value) => Object.keys(value).length > 0).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'بيانات استثناء البلاغ أو تصنيفه غير صالحة.' });
+  if (parsed.data.excludedFromKpi && !parsed.data.exclusionReason) return res.status(400).json({ error: 'اكتب سبب استبعاد البلاغ من المؤشرات.' });
+  if (parsed.data.kpiOverride && !db.prepare('SELECT 1 FROM kpis WHERE code = ?').get(parsed.data.kpiOverride)) {
+    return res.status(400).json({ error: 'رمز المؤشر المصحح غير موجود.' });
+  }
+  const ticket = db.prepare('SELECT excluded_from_kpi, exclusion_reason, kpi_override FROM tickets WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+  if (!ticket) return res.status(404).json({ error: 'البلاغ غير موجود.' });
+  const excluded = parsed.data.excludedFromKpi === undefined ? ticket.excluded_from_kpi : Number(parsed.data.excludedFromKpi);
+  const reason = parsed.data.excludedFromKpi === false ? '' : parsed.data.exclusionReason ?? ticket.exclusion_reason;
+  const override = parsed.data.kpiOverride === undefined ? ticket.kpi_override : parsed.data.kpiOverride;
+  db.prepare('UPDATE tickets SET excluded_from_kpi = ?, exclusion_reason = ?, kpi_override = ? WHERE id = ?')
+    .run(excluded, reason, override, req.params.id);
+  audit(req.user.id, 'update-kpi-classification', 'ticket', req.params.id);
+  res.json({ ok: true });
+});
+app.get('/api/contract-kpis/config', requireRole('admin'), (req, res) => {
+  const settings = Object.fromEntries(db.prepare(`SELECT key, value FROM app_settings
+    WHERE key IN ('contract_start_date','accountability_start','monthly_invoice_value')`).all()
+    .map(({ key, value }) => [key, value]));
+  res.json({
+    settings: {
+      contractStartDate: settings.contract_start_date || '2026-07-01',
+      accountabilityStart: settings.accountability_start || '2026-10-01',
+      monthlyInvoiceValue: Number(settings.monthly_invoice_value || 0)
+    },
+    kpis: db.prepare('SELECT code, name, category, source, target, importance FROM kpis ORDER BY code').all(),
+    categoryWeights: Object.fromEntries(db.prepare('SELECT category, weight FROM category_weights').all().map(({ category, weight }) => [category, weight])),
+    payoutTable: db.prepare('SELECT period, band, percentage FROM payout_table ORDER BY period, band').all(),
+    fines: db.prepare('SELECT id, kpi_code AS kpiCode, description, value, unit FROM fines ORDER BY id').all(),
+    hsSystems: db.prepare('SELECT kpi_code AS kpiCode, name, orders_per_school AS ordersPerSchool, school_filter AS schoolFilter FROM hs_systems ORDER BY kpi_code').all(),
+    categoryMap: db.prepare('SELECT layer3, kpi_code AS kpiCode FROM category_map ORDER BY layer3').all(),
+    waterKeywords: db.prepare('SELECT keyword FROM water_keywords ORDER BY keyword').all().map((item) => item.keyword)
+  });
+});
+app.put('/api/contract-kpis/config', requireRole('admin'), (req, res) => {
+  const categories = ['CM', 'OM', 'HS', 'SS'];
+  const bands = ['100', '95-99.99', '90-94.99', '85-89.99', '75-84.99', '70-74.99', '<70'];
+  const periods = ['1', '2', '3', '4-6', '7+'];
+  const parsed = z.object({
+    settings: z.object({
+      contractStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(isDateOnly).optional(),
+      accountabilityStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(isDateOnly).optional(),
+      monthlyInvoiceValue: z.number().min(0).max(1_000_000_000).optional()
+    }).optional(),
+    kpis: z.array(z.object({
+      code: z.string().regex(/^(CM|OM|HS|SS)\.\d{1,2}$/),
+      name: z.string().trim().min(1).max(200).optional(),
+      category: z.enum(categories).optional(),
+      source: z.enum(['auto', 'manual']).optional(),
+      target: z.number().gt(0).max(100).optional(),
+      importance: z.enum(['low', 'medium', 'high']).optional()
+    })).optional(),
+    categoryWeights: z.object({
+      CM: z.number().min(0).max(100), OM: z.number().min(0).max(100),
+      HS: z.number().min(0).max(100), SS: z.number().min(0).max(100)
+    }).optional(),
+    hsSystems: z.array(z.object({
+      kpiCode: z.string().regex(/^HS\.(5|6|7|8|9|10|11)$/),
+      name: z.string().trim().min(1).max(200),
+      ordersPerSchool: z.number().min(0).max(1000),
+      schoolFilter: z.enum(['all', 'has_elevator'])
+    })).optional(),
+    categoryMap: z.array(z.object({
+      layer3: z.string().trim().min(1).max(250),
+      kpiCode: z.string().regex(/^HS\.(5|6|7|8|9|10|11)$/).nullable()
+    })).optional(),
+    waterKeywords: z.array(z.string().trim().min(1).max(100)).max(100).optional(),
+    payoutTable: z.array(z.object({
+      period: z.enum(periods), band: z.enum(bands), percentage: z.number().min(0).max(100).nullable()
+    })).optional(),
+    fines: z.array(z.object({
+      kpiCode: z.string().regex(/^(CM|OM|HS|SS)\.\d{1,2}$/),
+      description: z.string().trim().min(1).max(250),
+      value: z.number().min(0).max(1_000_000_000),
+      unit: z.string().trim().max(100).default('')
+    })).optional()
+  }).refine((value) => Object.values(value).some((item) => item !== undefined)).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'تحقق من بيانات مؤشرات العقد والإعدادات.' });
+  const data = parsed.data;
+  if (data.categoryWeights && Math.abs(Object.values(data.categoryWeights).reduce((sum, weight) => sum + weight, 0) - 100) > 0.001) {
+    return res.status(400).json({ error: 'يجب أن يكون مجموع أوزان الفئات 100%.' });
+  }
+  if (data.hsSystems && new Set(data.hsSystems.map((item) => item.kpiCode)).size !== 7) {
+    return res.status(400).json({ error: 'يجب تعريف أنظمة HS.5 إلى HS.11 مرة واحدة لكل مؤشر.' });
+  }
+  if ((data.kpis && new Set(data.kpis.map((item) => item.code)).size !== data.kpis.length) ||
+      (data.categoryMap && new Set(data.categoryMap.map((item) => item.layer3)).size !== data.categoryMap.length)) {
+    return res.status(400).json({ error: 'لا تكرر رمز مؤشر أو تصنيف طبقة في إعدادات العقد.' });
+  }
+  if (data.payoutTable) {
+    const keys = new Set(data.payoutTable.map((item) => `${item.period}:${item.band}`));
+    if (keys.size !== 35 || periods.some((period) => bands.some((band) => !keys.has(`${period}:${band}`)))) {
+      return res.status(400).json({ error: 'يجب إرسال شرائح جدول الاستحقاق كاملة للفترات الخمس.' });
+    }
+  }
+  const knownKpis = new Set(db.prepare('SELECT code FROM kpis').all().map((item) => item.code));
+  if (data.kpis?.some((item) => !knownKpis.has(item.code)) ||
+      data.fines?.some((item) => !knownKpis.has(item.kpiCode)) ||
+      data.categoryMap?.some((item) => item.kpiCode && !knownKpis.has(item.kpiCode))) {
+    return res.status(400).json({ error: 'يتضمن الطلب رمز مؤشر غير موجود.' });
+  }
+  db.transaction(() => {
+    const saveSetting = db.prepare(`INSERT INTO app_settings (key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value`);
+    if (data.settings?.contractStartDate) saveSetting.run('contract_start_date', data.settings.contractStartDate);
+    if (data.settings?.accountabilityStart) saveSetting.run('accountability_start', data.settings.accountabilityStart);
+    if (data.settings?.monthlyInvoiceValue !== undefined) saveSetting.run('monthly_invoice_value', String(data.settings.monthlyInvoiceValue));
+    if (data.kpis) {
+      const update = db.prepare(`UPDATE kpis SET name=COALESCE(?,name), category=COALESCE(?,category),
+        source=COALESCE(?,source), target=COALESCE(?,target), importance=COALESCE(?,importance) WHERE code=?`);
+      for (const item of data.kpis) update.run(item.name ?? null, item.category ?? null, item.source ?? null, item.target ?? null, item.importance ?? null, item.code);
+    }
+    if (data.categoryWeights) {
+      const update = db.prepare('INSERT INTO category_weights (category, weight) VALUES (?, ?) ON CONFLICT(category) DO UPDATE SET weight=excluded.weight');
+      for (const [category, weight] of Object.entries(data.categoryWeights)) update.run(category, weight);
+    }
+    if (data.hsSystems) {
+      db.prepare('DELETE FROM hs_systems').run();
+      const insert = db.prepare('INSERT INTO hs_systems (kpi_code, name, orders_per_school, school_filter) VALUES (?, ?, ?, ?)');
+      for (const item of data.hsSystems) insert.run(item.kpiCode, item.name, item.ordersPerSchool, item.schoolFilter);
+    }
+    if (data.categoryMap) {
+      db.prepare('DELETE FROM category_map').run();
+      const insert = db.prepare('INSERT INTO category_map (layer3, kpi_code) VALUES (?, ?)');
+      for (const item of data.categoryMap) insert.run(item.layer3, item.kpiCode);
+    }
+    if (data.waterKeywords) {
+      db.prepare('DELETE FROM water_keywords').run();
+      const insert = db.prepare('INSERT INTO water_keywords (keyword) VALUES (?)');
+      for (const keyword of new Set(data.waterKeywords)) insert.run(keyword);
+    }
+    if (data.payoutTable) {
+      const update = db.prepare(`INSERT INTO payout_table (period, band, percentage) VALUES (?, ?, ?)
+        ON CONFLICT(period, band) DO UPDATE SET percentage=excluded.percentage`);
+      for (const item of data.payoutTable) update.run(item.period, item.band, item.percentage);
+    }
+    if (data.fines) {
+      db.prepare('DELETE FROM fines').run();
+      const insert = db.prepare('INSERT INTO fines (kpi_code, description, value, unit) VALUES (?, ?, ?, ?)');
+      for (const item of data.fines) insert.run(item.kpiCode, item.description, item.value, item.unit);
+    }
+  })();
+  audit(req.user.id, 'update', 'contract-kpi-config');
+  res.json({ ok: true });
+});
+app.put('/api/contract-kpis/results', requireRole('admin', 'receiver', 'engineer'), (req, res) => {
+  const parsed = z.object({
+    month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+    results: z.array(z.object({
+      kpiCode: z.string().regex(/^(CM|OM|HS|SS)\.\d{1,2}$/),
+      achievedPct: z.number().min(0).max(100),
+      fineCount: z.number().int().min(0).max(1_000_000).default(0)
+    })).max(36)
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'تحقق من شهر النتائج وقيم المؤشرات.' });
+  const known = new Map(db.prepare('SELECT code, source FROM kpis').all().map((item) => [item.code, item.source]));
+  if (parsed.data.results.some((item) => known.get(item.kpiCode) !== 'manual') ||
+      new Set(parsed.data.results.map((item) => item.kpiCode)).size !== parsed.data.results.length) {
+    return res.status(400).json({ error: 'يمكن إدخال كل مؤشر يدوي مرة واحدة فقط.' });
+  }
+  const upsert = db.prepare(`INSERT INTO kpi_results (month, kpi_code, achieved_pct, fine_count) VALUES (?, ?, ?, ?)
+    ON CONFLICT(month, kpi_code) DO UPDATE SET achieved_pct=excluded.achieved_pct, fine_count=excluded.fine_count`);
+  db.transaction((items) => items.forEach((item) =>
+    upsert.run(parsed.data.month, item.kpiCode, item.achievedPct, item.fineCount)))(parsed.data.results);
+  audit(req.user.id, 'update', 'contract-kpi-results', parsed.data.month);
+  res.json({ ok: true, saved: parsed.data.results.length });
+});
 app.patch('/api/schools/:schoolNumber', requireRole('admin', 'receiver'), (req, res) => {
   const currentNumber = normalizeSchoolNumber(req.params.schoolNumber);
   const current = db.prepare('SELECT * FROM schools WHERE school_number = ?').get(currentNumber);
@@ -845,7 +1102,9 @@ app.patch('/api/schools/:schoolNumber', requireRole('admin', 'receiver'), (req, 
     region: z.string().trim().max(250).optional(),
     schoolType: z.string().trim().max(100).optional(),
     buildingType: z.string().trim().max(100).optional(),
-    occupancySize: z.string().trim().max(100).optional()
+    occupancySize: z.string().trim().max(100).optional(),
+    elevatorContractor: z.string().trim().max(150).optional(),
+    hasElevator: z.boolean().optional()
   }).refine((value) => Object.keys(value).length > 0).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'تحقق من رقم المدرسة واسمها وبيانات المشرف والمنطقة.' });
   const updatedNumber = normalizeSchoolNumber(parsed.data.schoolNumber ?? current.school_number);
@@ -857,13 +1116,22 @@ app.patch('/api/schools/:schoolNumber', requireRole('admin', 'receiver'), (req, 
     region: parsed.data.region ?? current.region,
     school_type: parsed.data.schoolType ?? current.school_type,
     building_type: parsed.data.buildingType ?? current.building_type,
-    occupancy_size: parsed.data.occupancySize ?? current.occupancy_size
+    occupancy_size: parsed.data.occupancySize ?? current.occupancy_size,
+    elevator_contractor: parsed.data.elevatorContractor ?? current.elevator_contractor,
+    counts_in_kpi: Number(countsInContractKpi(parsed.data.buildingType ?? current.building_type)),
+    has_elevator: parsed.data.hasElevator === undefined ? current.has_elevator : Number(parsed.data.hasElevator)
   };
   try {
     db.transaction(() => {
-      db.prepare(`UPDATE schools SET school_number = ?, name = ?, supervisor = ?, region = ?, school_type = ?, building_type = ?, occupancy_size = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE school_number = ?`).run(updated.school_number, updated.name, updated.supervisor, updated.region, updated.school_type, updated.building_type, updated.occupancy_size, currentNumber);
+      db.prepare(`UPDATE schools SET school_number = ?, name = ?, supervisor = ?, region = ?, school_type = ?, building_type = ?,
+        occupancy_size = ?, elevator_contractor = ?, counts_in_kpi = ?, has_elevator = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE school_number = ?`).run(updated.school_number, updated.name, updated.supervisor, updated.region,
+        updated.school_type, updated.building_type, updated.occupancy_size, updated.elevator_contractor,
+        updated.counts_in_kpi, updated.has_elevator, currentNumber);
       if (updatedNumber !== currentNumber) {
+        db.prepare('UPDATE attached_override SET attached_school_number = ? WHERE attached_school_number = ?').run(updatedNumber, currentNumber);
+        db.prepare('UPDATE attached_override SET parent_school_number = ? WHERE parent_school_number = ?').run(updatedNumber, currentNumber);
+        db.prepare('UPDATE schools SET parent_school_id = ? WHERE parent_school_id = ?').run(updatedNumber, currentNumber);
         db.prepare('UPDATE school_change_log SET school_number = ? WHERE school_number = ?').run(updatedNumber, currentNumber);
       }
       recordSchoolChange(updatedNumber, req.user.id, 'manual', current, updated);
@@ -872,6 +1140,7 @@ app.patch('/api/schools/:schoolNumber', requireRole('admin', 'receiver'), (req, 
           WHERE matched_school_number = ?`).run(updatedNumber, currentNumber);
       }
     })();
+    refreshAttachedSchoolParents();
     refreshTicketSchoolMatches();
   } catch (error) {
     if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
@@ -919,12 +1188,16 @@ function storeSchools(rows, userId = null, source = 'sync') {
     currentNumbers.add(school.number);
   }
 
-  const save = db.prepare(`INSERT INTO schools (school_number, name, supervisor, region, school_type, building_type, occupancy_size, source_data, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  const save = db.prepare(`INSERT INTO schools
+    (school_number, name, supervisor, region, school_type, building_type, occupancy_size, elevator_contractor,
+      counts_in_kpi, has_elevator, source_data, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     ON CONFLICT(school_number) DO UPDATE SET name=excluded.name, supervisor=excluded.supervisor, region=excluded.region,
       school_type=COALESCE(NULLIF(excluded.school_type, ''), schools.school_type),
       building_type=COALESCE(NULLIF(excluded.building_type, ''), schools.building_type),
       occupancy_size=COALESCE(NULLIF(excluded.occupancy_size, ''), schools.occupancy_size),
+      elevator_contractor=COALESCE(NULLIF(excluded.elevator_contractor, ''), schools.elevator_contractor),
+      counts_in_kpi=excluded.counts_in_kpi, has_elevator=excluded.has_elevator,
       source_data=CASE WHEN excluded.source_data <> '[]' THEN excluded.source_data ELSE schools.source_data END,
       updated_at=CURRENT_TIMESTAMP`);
   db.transaction((items) => {
@@ -941,6 +1214,12 @@ function storeSchools(rows, userId = null, source = 'sync') {
       recordSchoolChange(school.number, userId, source, previous, after);
       db.prepare('UPDATE schools SET school_number = ? WHERE school_number = ?')
         .run(school.number, previous.school_number);
+      db.prepare('UPDATE attached_override SET attached_school_number = ? WHERE attached_school_number = ?')
+        .run(school.number, previous.school_number);
+      db.prepare('UPDATE attached_override SET parent_school_number = ? WHERE parent_school_number = ?')
+        .run(school.number, previous.school_number);
+      db.prepare('UPDATE schools SET parent_school_id = ? WHERE parent_school_id = ?')
+        .run(school.number, previous.school_number);
       db.prepare('UPDATE tickets SET matched_school_number = ? WHERE matched_school_number = ?')
         .run(school.number, previous.school_number);
       db.prepare('UPDATE tickets SET school_match_override = 1 WHERE matched_school_number = ?')
@@ -953,25 +1232,65 @@ function storeSchools(rows, userId = null, source = 'sync') {
       const previousSourceData = JSON.parse(before?.source_data || '[]');
       const incomingSourceData = school.sourceData || [];
       const sourceData = mergeSchoolSourceData(previousSourceData, incomingSourceData);
+      const buildingType = school.buildingType || before?.building_type || '';
+      const elevatorContractor = school.elevatorContractor || before?.elevator_contractor || '';
+      const countsInKpi = Number(countsInContractKpi(buildingType));
+      const hasElevator = school.hasElevator === undefined
+        ? school.elevatorContractor
+          ? Number(normalizeKpiText(school.elevatorContractor) !== normalizeKpiText('لا ينطبق'))
+          : before?.has_elevator ?? Number(Boolean(elevatorContractor) && normalizeKpiText(elevatorContractor) !== normalizeKpiText('لا ينطبق'))
+        : Number(school.hasElevator);
       const after = {
         school_number: school.number,
         name: school.name,
         supervisor: school.supervisor || '',
         region: school.region || '',
         school_type: school.schoolType || before?.school_type || '',
-        building_type: school.buildingType || before?.building_type || '',
+        building_type: buildingType,
         occupancy_size: school.occupancySize || before?.occupancy_size || ''
       };
       save.run(
         school.number, school.name, school.supervisor || '', school.region || '',
-        school.schoolType || '', school.buildingType || '', school.occupancySize || '',
-        JSON.stringify(sourceData)
+        school.schoolType || '', buildingType, school.occupancySize || '',
+        elevatorContractor, countsInKpi, hasElevator, JSON.stringify(sourceData)
       );
       recordSchoolChange(school.number, userId, source, before, after);
     });
   })(rows);
   refreshTicketSchoolMatches();
+  refreshAttachedSchoolParents();
   return { renumbered: renumberedSchools.length };
+}
+function schoolCoordinates(school) {
+  const sourceData = JSON.parse(school.source_data || '[]');
+  return getSchoolMapCoordinates(sourceData) || { latitude: null, longitude: null };
+}
+function refreshAttachedSchoolParents() {
+  const schools = db.prepare('SELECT school_number, building_type, counts_in_kpi, has_elevator, source_data FROM schools').all()
+    .map((school) => ({ ...school, ...schoolCoordinates(school) }));
+  const parentCandidates = schools.filter((school) =>
+    normalizeKpiText(school.building_type) !== normalizeKpiText('مشترك ملحق'));
+  const schoolByNumber = new Map(schools.map((school) => [school.school_number, school]));
+  const overrides = new Map(db.prepare('SELECT attached_school_number, parent_school_number FROM attached_override').all()
+    .map((item) => [item.attached_school_number, item.parent_school_number]));
+  const update = db.prepare('UPDATE schools SET counts_in_kpi = ?, has_elevator = ?, parent_school_id = ? WHERE school_number = ?');
+  db.transaction((items) => {
+    for (const school of items) {
+      const isAttached = normalizeKpiText(school.building_type) === normalizeKpiText('مشترك ملحق');
+      const overrideParent = overrides.get(school.school_number);
+      const overridden = overrideParent && schoolByNumber.get(overrideParent);
+      const nearest = isAttached && !overridden ? findNearestParent(school, parentCandidates) : null;
+      const parent = isAttached
+        ? (overridden?.counts_in_kpi ? overridden.school_number : nearest?.schoolNumber || null)
+        : null;
+      update.run(
+        Number(countsInContractKpi(school.building_type)),
+        school.has_elevator ? 1 : 0,
+        parent,
+        school.school_number
+      );
+    }
+  })(schools);
 }
 async function syncSchoolData(urlValue = DEFAULT_SCHOOLS_URL, userId = null) {
   let csv;
