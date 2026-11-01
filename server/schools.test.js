@@ -47,6 +47,16 @@ test('summarizes eligible school buildings, elevator contractors, gender, and ne
   ]);
 });
 
+test('normalizes building type and elevator contractor formatting in school summaries', () => {
+  const summary = summarizeSchools([
+    { building_type: 'مست\u200fقل', elevator_contractor: 'شركة المصاعد', source_data: '[]' },
+    { building_type: 'مشترك-أساسي', elevator_contractor: 'لا  ينطبق', source_data: '[]' },
+    { building_type: 'مشترك ملحق', elevator_contractor: 'شركة المصاعد', source_data: '[]' }
+  ]);
+  assert.equal(summary.totalSchools, 2);
+  assert.equal(summary.elevatorCount, 1);
+});
+
 test('parses the published school-sheet headers and normalizes school numbers', () => {
   const csv = 'ID,اسم الموقع,الرقم الوزاري,العنوان,زون,مشرف الشركة,المسئول,نوع المدرسة\n1,مدرسة تجريبية,S- ١٢٣ ٤٥٦,منطقة الرياض,G2-Z6,مشرف تجريبي,مسؤول المدرسة,حكومية\n';
   const [school] = parseSchoolCsv(Buffer.from(csv));

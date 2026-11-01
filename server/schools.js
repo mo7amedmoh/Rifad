@@ -18,7 +18,10 @@ function normalizeHeader(value) {
 
 function summarizeSchools(schools) {
   const normalizeValue = (value) => normalizeHeader(value);
-  const isSchoolBuilding = (value) => ['مستقل', 'مشترك اساسي'].includes(normalizeValue(value));
+  const normalizeCategory = (value) => normalizeValue(
+    String(value || '').normalize('NFKC').replace(/\p{Cf}/gu, '')
+  ).replace(/[\s\p{P}\p{S}]+/gu, '');
+  const isSchoolBuilding = (value) => ['مستقل', 'مشتركاساسي'].includes(normalizeCategory(value));
   const eligibleSchools = schools.filter((school) => isSchoolBuilding(school.building_type));
   const neighborhoods = new Map();
   let elevatorCount = 0;
@@ -26,8 +29,8 @@ function summarizeSchools(schools) {
   let girlsCount = 0;
 
   for (const school of eligibleSchools) {
-    const contractor = normalizeValue(school.elevator_contractor);
-    if (contractor && contractor !== normalizeValue('لا ينطبق')) elevatorCount += 1;
+    const contractor = normalizeCategory(school.elevator_contractor);
+    if (contractor && !contractor.includes(normalizeCategory('لا ينطبق'))) elevatorCount += 1;
 
     const gender = normalizeValue(school.school_type);
     if (gender.includes('بنين') || gender.includes('boys')) boysCount += 1;
