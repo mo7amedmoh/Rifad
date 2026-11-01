@@ -27,7 +27,11 @@ const {
 } = require('./contract-kpis');
 const { isBreached, isClosed, isCancelled, isOpen, calculateCompliance } = require('./ticket-status');
 const { createContractKpiService } = require('./contract-kpi-service');
+const { createMonthlyPerformanceReportService, MONTH_PATTERN } = require('./monthly-performance-report');
 const contractKpiService = createContractKpiService(db);
+const monthlyReportService = createMonthlyPerformanceReportService({
+  db, contractKpiService, slaRemainingMinutes, getSlaSettings
+});
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -119,7 +123,90 @@ function normalizeSchoolName(value) {
 function schoolNumberKey(value) {
   return String(value || '').replace(/^m[-–—]?|[-–—]?m$/i, '');
 }
-function refreshTicketSchoolMatches() {
+const ticketHistoryFields = {
+  priority: 'الأولوية',
+  status: 'الحالة',
+  slm_status: 'حالة SLA',
+  created_at: 'تاريخ الإنشاء',
+  resolved_at: 'تاريخ الحل',
+  sla_due_at: 'موعد استحقاق SLA',
+  sla_policy_hours: 'مدة SLA المطبقة (ساعة)',
+  effective_sla_due_at: 'موعد استحقاق SLA المحسوب',
+  sla_remaining_minutes: 'المدة المتبقية على SLA',
+  needs_attention: 'تنبيه SLA',
+  school_number: 'رقم المدرسة في المصدر',
+  building_name: 'اسم المدرسة في المصدر',
+  matched_school_number: 'المدرسة المرتبطة',
+  matched_school_name: 'اسم المدرسة المرتبطة',
+  school_match_override: 'ربط المدرسة يدويًا',
+  parent_school_id: 'المدرسة الأم',
+  parent_school_name: 'اسم المدرسة الأم',
+  breach_reason: 'سبب الاختراق',
+  breach_note: 'ملاحظة الاختراق',
+  excluded_from_kpi: 'مستبعد من مؤشرات العقد',
+  exclusion_reason: 'سبب الاستبعاد من المؤشرات',
+  kpi_override: 'تصنيف مؤشر العقد',
+  deleted_at: 'حالة السجل'
+};
+function getTicketHistoryState(ticketId) {
+  const state = db.prepare(`SELECT t.priority, t.status, t.slm_status, t.created_at, t.resolved_at,
+      t.sla_due_at, t.sla_remaining_minutes, t.needs_attention, t.school_number, t.building_name,
+      t.matched_school_number, t.school_match_override, s.name AS matched_school_name,
+      s.parent_school_id, p.name AS parent_school_name, t.breach_reason,
+      t.breach_note, t.excluded_from_kpi, t.exclusion_reason, t.kpi_override, t.deleted_at
+    FROM tickets t LEFT JOIN schools s ON s.school_number = t.matched_school_number
+    LEFT JOIN schools p ON p.school_number = s.parent_school_id
+    WHERE t.id = ?`).get(ticketId);
+  if (!state) return null;
+  const slaSettings = getSlaSettings();
+  const priority = String(state.priority || '');
+  const slaPolicyHours = /حرج|critical|عالي|high|p1/i.test(priority)
+    ? slaSettings.criticalHours
+    : /متوسط|medium|moderate|p2/i.test(priority) ? slaSettings.mediumHours : null;
+  const createdAt = Date.parse(state.created_at);
+  const sourceDeadline = Date.parse(state.sla_due_at);
+  const effectiveDeadline = slaPolicyHours !== null && Number.isFinite(createdAt)
+    ? new Date(createdAt + slaPolicyHours * 60 * 60 * 1000).toISOString()
+    : Number.isFinite(sourceDeadline) ? new Date(sourceDeadline).toISOString() : null;
+  return {
+    ...state,
+    sla_policy_hours: slaPolicyHours,
+    effective_sla_due_at: effectiveDeadline,
+    needs_attention: Boolean(state.needs_attention),
+    school_match_override: Boolean(state.school_match_override),
+    excluded_from_kpi: Boolean(state.excluded_from_kpi),
+    deleted_at: state.deleted_at ? 'مخفي من القوائم' : null
+  };
+}
+function recordTicketHistory(ticketId, before, after, { actorId = null, source, reference = '' }) {
+  const changes = {};
+  for (const [field, label] of Object.entries(ticketHistoryFields)) {
+    if (!Object.hasOwn(after || {}, field)) continue;
+    const previous = before && Object.hasOwn(before, field) ? before[field] : null;
+    const next = after[field];
+    if (JSON.stringify(previous) !== JSON.stringify(next)) changes[field] = { label, before: previous, after: next };
+  }
+  if (!Object.keys(changes).length) return false;
+  db.prepare(`INSERT INTO ticket_history (ticket_id, actor_id, source, reference, changes)
+    VALUES (?, ?, ?, ?, ?)`).run(ticketId, actorId, source, reference, JSON.stringify(changes));
+  return true;
+}
+function seedTicketHistory() {
+  const tickets = db.prepare('SELECT id FROM tickets WHERE NOT EXISTS (SELECT 1 FROM ticket_history WHERE ticket_id = tickets.id)').all();
+  for (const { id } of tickets) {
+    const state = getTicketHistoryState(id);
+    if (state) recordTicketHistory(id, null, state, { source: 'baseline', reference: 'بدء تتبع التغييرات' });
+  }
+}
+function captureTicketHistory(ticketIds) {
+  return new Map(ticketIds.map((id) => [id, getTicketHistoryState(id)]).filter(([, state]) => state));
+}
+function recordTicketHistorySnapshot(snapshot, { actorId = null, source, reference = '' }) {
+  for (const [id, before] of snapshot) {
+    recordTicketHistory(id, before, getTicketHistoryState(id), { actorId, source, reference });
+  }
+}
+function refreshTicketSchoolMatches(actorId = null, source = 'school_sync', recordHistory = true) {
   const schools = db.prepare('SELECT school_number, name FROM schools').all();
   const schoolsByNumber = new Map(schools.map((school) => [school.school_number, school.school_number]));
   const schoolNumbersByKey = new Map();
@@ -141,11 +228,18 @@ function refreshTicketSchoolMatches() {
       const schoolName = names.get(normalizeSchoolName(ticket.building_name));
       const matchedSchoolNumber = overriddenSchool || schoolNumber || schoolName || null;
       const override = overriddenSchool ? 1 : 0;
-      if (matchedSchoolNumber !== ticket.matched_school_number || override !== ticket.school_match_override) update.run(matchedSchoolNumber, override, ticket.id);
+      if (matchedSchoolNumber !== ticket.matched_school_number || override !== ticket.school_match_override) {
+        const before = getTicketHistoryState(ticket.id);
+        update.run(matchedSchoolNumber, override, ticket.id);
+        if (recordHistory) {
+          recordTicketHistory(ticket.id, before, getTicketHistoryState(ticket.id), { actorId, source });
+        }
+      }
     }
   })(tickets);
 }
 refreshTicketSchoolMatches();
+seedTicketHistory();
 function getSlaSettings() {
   const settings = db.prepare("SELECT key, value FROM app_settings WHERE key IN ('sla_critical_hours', 'sla_medium_hours')").all();
   const values = Object.fromEntries(settings.map(({ key, value }) => [key, Number(value)]));
@@ -443,6 +537,95 @@ app.get('/api/summary', requireRole(...roles), (req, res) => {
     ...item,
     compliance: item.total ? Math.round(((item.total - item.breached) / item.total) * 1000) / 10 : 0
   })).sort((a, b) => b.total - a.total).slice(0, 10);
+  const schoolDirectory = db.prepare(`SELECT school_number, name, supervisor, building_type, parent_school_id, source_data
+    FROM schools`).all();
+  const schoolDetails = new Map(schoolDirectory.map((school) => [school.school_number, school]));
+  const schoolActivity = new Map();
+  const neighborhoodActivity = new Map();
+  const supervisorWorkloadStats = new Map();
+  for (const ticket of eligible) {
+    const school = schoolDetails.get(ticket.matched_school_number);
+    if (!school) continue;
+    const activitySchool = school.parent_school_id ? schoolDetails.get(school.parent_school_id) || school : school;
+    const schoolRow = schoolActivity.get(activitySchool.school_number) || {
+      name: activitySchool.name,
+      supervisor: activitySchool.supervisor || 'غير محدد',
+      total: 0,
+      breached: 0
+    };
+    schoolRow.total += 1;
+    if (isBreached(ticket)) schoolRow.breached += 1;
+    schoolActivity.set(activitySchool.school_number, schoolRow);
+
+    const sourceData = JSON.parse(activitySchool.source_data || '[]');
+    const neighborhoodField = sourceData.find((field) => {
+      const header = normalizeKpiText(field.header || field.label);
+      return ['الحي', 'اسم الحي', 'الحي السكني', 'district', 'neighborhood'].includes(header);
+    });
+    const neighborhood = neighborhoodField?.value?.trim() || 'غير محدد';
+    const neighborhoodRow = neighborhoodActivity.get(neighborhood) || { name: neighborhood, total: 0, breached: 0 };
+    neighborhoodRow.total += 1;
+    if (isBreached(ticket)) neighborhoodRow.breached += 1;
+    neighborhoodActivity.set(neighborhood, neighborhoodRow);
+
+    const supervisorName = activitySchool.supervisor || 'غير محدد';
+    const supervisorRow = supervisorWorkloadStats.get(supervisorName) || { tickets: 0, breached: 0 };
+    supervisorRow.tickets += 1;
+    if (isBreached(ticket)) supervisorRow.breached += 1;
+    supervisorWorkloadStats.set(supervisorName, supervisorRow);
+  }
+  const rankActivity = (activity, metric = 'total') => [...activity.values()]
+    .filter((item) => item[metric] > 0)
+    .sort((a, b) => b[metric] - a[metric] || b.total - a.total || a.name.localeCompare(b.name, 'ar'))
+    .slice(0, 10);
+  const supervisorSchoolCounts = new Map();
+  for (const school of schoolDirectory) {
+    if (!countsInContractKpi(school.building_type)) continue;
+    const name = school.supervisor || 'غير محدد';
+    supervisorSchoolCounts.set(name, (supervisorSchoolCounts.get(name) || 0) + 1);
+  }
+  const supervisorWorkload = [...supervisorSchoolCounts.entries()].map(([name, schoolCount]) => {
+    const workload = supervisorWorkloadStats.get(name) || { tickets: 0, breached: 0 };
+    return {
+      name,
+      schoolCount,
+      tickets: workload.tickets,
+      breached: workload.breached,
+      ticketsPerSchool: schoolCount ? Math.round(workload.tickets / schoolCount * 100) / 100 : 0,
+      breachesPerSchool: schoolCount ? Math.round(workload.breached / schoolCount * 100) / 100 : 0
+    };
+  });
+  for (const [name, workload] of supervisorWorkloadStats) {
+    if (supervisorSchoolCounts.has(name)) continue;
+    supervisorWorkload.push({
+      name, schoolCount: 0, tickets: workload.tickets, breached: workload.breached,
+      ticketsPerSchool: 0, breachesPerSchool: 0
+    });
+  }
+  supervisorWorkload.sort((a, b) => b.ticketsPerSchool - a.ticketsPerSchool || b.tickets - a.tickets || a.name.localeCompare(b.name, 'ar'));
+  const weekdayNames = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+  const ticketTimeHeatmap = weekdayNames.map((day) => ({
+    day,
+    cells: Array.from({ length: 24 }, (_, hour) => ({ hour, total: 0, breached: 0 }))
+  }));
+  const riyadhTimeParts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Riyadh',
+    weekday: 'short',
+    hour: '2-digit',
+    hourCycle: 'h23'
+  });
+  const weekdayIndices = new Map([['Sun', 0], ['Mon', 1], ['Tue', 2], ['Wed', 3], ['Thu', 4], ['Fri', 5], ['Sat', 6]]);
+  for (const ticket of eligible) {
+    const createdAt = new Date(ticket.created_at);
+    if (!Number.isFinite(createdAt.getTime())) continue;
+    const parts = Object.fromEntries(riyadhTimeParts.formatToParts(createdAt).map(({ type, value }) => [type, value]));
+    const dayIndex = weekdayIndices.get(parts.weekday);
+    const hour = Number(parts.hour);
+    if (dayIndex === undefined || !Number.isInteger(hour) || hour < 0 || hour > 23) continue;
+    const cell = ticketTimeHeatmap[dayIndex].cells[hour];
+    cell.total += 1;
+    if (isBreached(ticket)) cell.breached += 1;
+  }
   const startMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11, 1));
   const endMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
   const trendTickets = db.prepare(`SELECT t.created_at, t.slm_status, t.status
@@ -501,6 +684,12 @@ app.get('/api/summary', requireRole(...roles), (req, res) => {
     monthlyCompliance,
     breachedByLayer: breachedCountBy('layer3'),
     breachedByDay,
+    schoolHeatmap: rankActivity(schoolActivity),
+    schoolBreachHeatmap: rankActivity(schoolActivity, 'breached'),
+    neighborhoodHeatmap: rankActivity(neighborhoodActivity),
+    neighborhoodBreachHeatmap: rankActivity(neighborhoodActivity, 'breached'),
+    ticketTimeHeatmap,
+    supervisorWorkload,
     supervisorPerformance: supervisorPerformance.slice(0, 10),
     bestSupervisor: supervisorPerformance[0] || null
   });
@@ -591,6 +780,11 @@ app.get('/api/tickets/:id/details', requireRole(...roles), (req, res) => {
         FROM tickets WHERE id <> ? AND matched_school_number = ? AND layer3 = ? AND deleted_at IS NULL
         ORDER BY created_at DESC LIMIT 10`).all(ticket.id, ticket.matched_school_number, ticket.layer3)
     : [];
+  const history = db.prepare(`SELECT h.id, h.source, h.reference, h.changes, h.created_at,
+      u.display_name AS actor_name
+    FROM ticket_history h LEFT JOIN users u ON u.id = h.actor_id
+    WHERE h.ticket_id = ? ORDER BY h.id DESC LIMIT 200`).all(ticketId)
+    .map((entry) => ({ ...entry, changes: JSON.parse(entry.changes) }));
   res.json({
     item: {
       ...cleanTicket(ticket),
@@ -598,7 +792,8 @@ app.get('/api/tickets/:id/details', requireRole(...roles), (req, res) => {
       building_type: ticket.building_type || '',
       occupancy_size: ticket.occupancy_size || '',
       sla_remaining_minutes: slaRemainingMinutes(ticket, getSlaSettings()),
-      relatedTickets
+      relatedTickets,
+      history
     }
   });
 });
@@ -608,6 +803,10 @@ app.post('/api/import/tickets', requireRole('admin', 'receiver'),
     try {
       if (!Buffer.isBuffer(req.body)) return res.status(415).json({ error: 'ارفع ملف CSV بترميز UTF-8.' });
       const tickets = parseCsv(req.body);
+      const rawFilename = String(req.get('x-filename') || 'tickets.csv');
+      let filename;
+      try { filename = decodeURIComponent(rawFilename); } catch { filename = rawFilename; }
+      filename = filename.replace(/[\\/:<>"|?*\u0000-\u001f]/g, '_').trim().slice(0, 180) || 'tickets.csv';
       const upsert = db.prepare(`INSERT INTO tickets
         (case_id, priority, status, created_at, slm_status, description, layer2, layer3, school_number, building_name, resolved_at, sla_due_at, sla_remaining_minutes, needs_attention, imported_at)
         VALUES (@case_id,@priority,@status,@created_at,@slm_status,@description,@layer2,@layer3,@school_number,@building_name,@resolved_at,@sla_due_at,@sla_remaining_minutes,@needs_attention,CURRENT_TIMESTAMP)
@@ -619,21 +818,24 @@ app.post('/api/import/tickets', requireRole('admin', 'receiver'),
           sla_due_at=COALESCE(excluded.sla_due_at,tickets.sla_due_at),
           sla_remaining_minutes=excluded.sla_remaining_minutes, needs_attention=excluded.needs_attention,
           imported_at=CURRENT_TIMESTAMP`);
-      const exists = db.prepare('SELECT COUNT(*) AS count FROM tickets WHERE case_id = ?');
       let inserted = 0; let updated = 0;
       const transaction = db.transaction((rows) => {
         for (const ticket of rows) {
-          if (exists.get(ticket.case_id).count) updated += 1; else inserted += 1;
+          const existing = db.prepare('SELECT id FROM tickets WHERE case_id = ?').get(ticket.case_id);
+          const before = existing ? getTicketHistoryState(existing.id) : null;
+          if (existing) updated += 1; else inserted += 1;
           upsert.run(ticket);
+          const saved = db.prepare('SELECT id FROM tickets WHERE case_id = ?').get(ticket.case_id);
+          recordTicketHistory(saved.id, before, getTicketHistoryState(saved.id), {
+            actorId: req.user.id,
+            source: existing ? 'ticket_import' : 'ticket_created',
+            reference: filename
+          });
         }
-        const rawFilename = String(req.get('x-filename') || 'tickets.csv');
-        let filename;
-        try { filename = decodeURIComponent(rawFilename); } catch { filename = rawFilename; }
-        filename = filename.replace(/[\\/:<>\"|?*\u0000-\u001f]/g, '_').trim().slice(0, 180) || 'tickets.csv';
         db.prepare('INSERT INTO import_runs (imported_by, filename, total_rows, inserted_rows, updated_rows) VALUES (?, ?, ?, ?, ?)').run(req.user.id, filename, rows.length, inserted, updated);
       });
       transaction(tickets);
-      refreshTicketSchoolMatches();
+      refreshTicketSchoolMatches(req.user.id, 'ticket_import');
       audit(req.user.id, 'import', 'tickets', tickets.length);
       res.json({ imported: tickets.length, inserted, updated, message: `تم استيراد ${tickets.length} بلاغًا؛ ${inserted} جديد و${updated} محدّث.` });
     } catch (error) {
@@ -646,14 +848,22 @@ app.patch('/api/tickets/:id/breach-reason', requireRole('admin'), (req, res) => 
   const parsed = z.object({ reason: z.enum(breachReasons), note: z.string().trim().max(500).optional().default('') }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'اختر سببًا صحيحًا للاختراق.' });
   if (parsed.data.reason === 'أخرى' && !parsed.data.note) return res.status(400).json({ error: 'اكتب سبب الاختراق عند اختيار «أخرى».' });
+  const before = getTicketHistoryState(Number(req.params.id));
   const result = db.prepare('UPDATE tickets SET breach_reason = ?, breach_note = ? WHERE id = ? AND deleted_at IS NULL').run(parsed.data.reason, parsed.data.note, req.params.id);
   if (!result.changes) return res.status(404).json({ error: 'البلاغ غير موجود.' });
+  recordTicketHistory(Number(req.params.id), before, getTicketHistoryState(Number(req.params.id)), {
+    actorId: req.user.id, source: 'ticket_edit', reference: 'سبب الاختراق'
+  });
   audit(req.user.id, 'set-breach-reason', 'ticket', req.params.id);
   res.json({ ok: true });
 });
 app.delete('/api/tickets/:id', requireRole('admin'), (req, res) => {
+  const before = getTicketHistoryState(Number(req.params.id));
   const result = db.prepare('UPDATE tickets SET deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL').run(req.params.id);
   if (!result.changes) return res.status(404).json({ error: 'البلاغ غير موجود.' });
+  recordTicketHistory(Number(req.params.id), before, getTicketHistoryState(Number(req.params.id)), {
+    actorId: req.user.id, source: 'ticket_edit', reference: 'إخفاء البلاغ'
+  });
   audit(req.user.id, 'soft-delete', 'ticket', req.params.id);
   res.json({ ok: true, message: 'تم إخفاء البلاغ مع الاحتفاظ به في السجل.' });
 });
@@ -730,15 +940,22 @@ app.post('/api/schools', requireRole('admin', 'receiver'), (req, res) => {
 });
 app.delete('/api/schools', requireRole('admin'), (req, res) => {
   const count = db.prepare('SELECT COUNT(*) AS count FROM schools').get().count;
+  const ticketSnapshot = captureTicketHistory(db.prepare('SELECT id FROM tickets').all().map(({ id }) => id));
   db.transaction(() => {
     db.prepare('DELETE FROM attached_override').run();
     db.prepare('DELETE FROM schools').run();
     audit(req.user.id, 'delete-all', 'schools', count);
   })();
+  recordTicketHistorySnapshot(ticketSnapshot, {
+    actorId: req.user.id, source: 'school_delete', reference: 'حذف دليل المدارس'
+  });
   res.json({ deleted: count, message: `تم حذف ${count} مدرسة من الدليل. لم تُحذف البلاغات أو سجلات التغييرات.` });
 });
 app.delete('/api/schools/:schoolNumber', requireRole('admin'), (req, res) => {
   const schoolNumber = normalizeSchoolNumber(req.params.schoolNumber);
+  const ticketSnapshot = captureTicketHistory(db.prepare(`SELECT t.id FROM tickets t
+    LEFT JOIN schools s ON s.school_number = t.matched_school_number
+    WHERE t.matched_school_number = ? OR s.parent_school_id = ?`).all(schoolNumber, schoolNumber).map(({ id }) => id));
   const result = db.transaction(() => {
     const deleted = db.prepare('DELETE FROM schools WHERE school_number = ?').run(schoolNumber);
     if (!deleted.changes) return 0;
@@ -748,7 +965,10 @@ app.delete('/api/schools/:schoolNumber', requireRole('admin'), (req, res) => {
     return deleted.changes;
   })();
   if (!result) return res.status(404).json({ error: 'المدرسة غير موجودة.' });
-  refreshAttachedSchoolParents();
+  refreshAttachedSchoolParents(req.user.id, 'school_delete', false);
+  recordTicketHistorySnapshot(ticketSnapshot, {
+    actorId: req.user.id, source: 'school_delete', reference: schoolNumber
+  });
   audit(req.user.id, 'delete', 'school', schoolNumber);
   res.json({ ok: true, message: 'حُذفت المدرسة من الدليل مع الاحتفاظ بالبلاغات وسجل التغييرات.' });
 });
@@ -879,6 +1099,89 @@ app.get('/api/contract-kpis/month', requireRole(...roles), (req, res) => {
     throw error;
   }
 });
+const monthlyReportSections = [
+  'subcontractor', 'inventory', 'supportOffice', 'financialReview',
+  'resourceConsumption', 'potentialIncidents', 'assetSchedules', 'otherItems'
+];
+app.get('/api/monthly-performance-report', requireRole(...roles), (req, res) => {
+  const month = String(req.query.month || '');
+  if (!MONTH_PATTERN.test(month)) return res.status(400).json({ error: 'صيغة الشهر يجب أن تكون YYYY-MM.' });
+  try {
+    res.json({
+      report: monthlyReportService.getReport(month),
+      manualSections: monthlyReportService.getManualSections(month, monthlyReportSections)
+    });
+  } catch (error) {
+    if (/صيغة الشهر/.test(error.message)) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+});
+app.put('/api/monthly-performance-report/manual-sections', requireRole('admin', 'receiver', 'engineer'), (req, res) => {
+  const parsed = z.object({
+    month: z.string().regex(MONTH_PATTERN),
+    sections: z.array(z.object({
+      key: z.enum(monthlyReportSections),
+      text: z.string().max(20_000)
+    })).max(monthlyReportSections.length)
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'بيانات أقسام التقرير اليدوية غير صالحة.' });
+  const save = db.transaction((month, sections) => {
+    const upsert = db.prepare(`INSERT INTO report_manual_sections (month, section_key, text)
+      VALUES (?, ?, ?) ON CONFLICT(month, section_key) DO UPDATE SET
+      text=excluded.text, updated_at=CURRENT_TIMESTAMP`);
+    for (const section of sections) upsert.run(month, section.key, section.text);
+  });
+  save(parsed.data.month, parsed.data.sections);
+  res.json({ ok: true, manualSections: monthlyReportService.getManualSections(parsed.data.month, monthlyReportSections) });
+});
+app.get('/api/monthly-performance-report/snapshots', requireRole(...roles), (req, res) => {
+  const month = String(req.query.month || '');
+  if (!MONTH_PATTERN.test(month)) return res.status(400).json({ error: 'صيغة الشهر يجب أن تكون YYYY-MM.' });
+  const items = db.prepare(`SELECT s.id, s.month, s.created_at, u.display_name AS created_by
+    FROM report_snapshots s LEFT JOIN users u ON u.id = s.created_by
+    WHERE s.month = ? ORDER BY s.id DESC`).all(month);
+  res.json({ items });
+});
+app.get('/api/monthly-performance-report/snapshots/:id', requireRole(...roles), (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: 'معرف النسخة غير صالح.' });
+  const item = db.prepare(`SELECT s.id, s.month, s.created_at, u.display_name AS created_by, s.data
+    FROM report_snapshots s LEFT JOIN users u ON u.id = s.created_by WHERE s.id = ?`).get(id);
+  if (!item) return res.status(404).json({ error: 'النسخة المعتمدة غير موجودة.' });
+  try {
+    res.json({ snapshot: { id: item.id, month: item.month, created_at: item.created_at, created_by: item.created_by, status: 'approved', data: JSON.parse(item.data) } });
+  } catch {
+    res.status(500).json({ error: 'تعذر قراءة بيانات النسخة المعتمدة.' });
+  }
+});
+app.post('/api/monthly-performance-report/snapshots', requireRole('admin', 'receiver', 'engineer'), (req, res) => {
+  const parsed = z.object({
+    month: z.string().regex(MONTH_PATTERN),
+    data: z.object({
+      month: z.string().regex(MONTH_PATTERN),
+      narrative: z.string().max(20_000),
+      font: z.enum(['Arial', 'Calibri', 'Times New Roman']).optional()
+    })
+  }).safeParse(req.body);
+  if (!parsed.success || parsed.data.data.month !== parsed.data.month) {
+    return res.status(400).json({ error: 'بيانات التقرير المراد اعتماده غير صالحة.' });
+  }
+  const snapshotData = {
+    month: parsed.data.month,
+    report: monthlyReportService.getReport(parsed.data.month),
+    manualSections: monthlyReportService.getManualSections(parsed.data.month, monthlyReportSections),
+    narrative: parsed.data.data.narrative,
+    font: parsed.data.data.font || 'Arial'
+  };
+  const data = JSON.stringify(snapshotData);
+  if (Buffer.byteLength(data, 'utf8') > 5_000_000) return res.status(413).json({ error: 'حجم نسخة التقرير يتجاوز الحد المسموح.' });
+  const result = db.prepare('INSERT INTO report_snapshots (month, created_by, data) VALUES (?, ?, ?)')
+    .run(parsed.data.month, req.user.id, data);
+  audit(req.user.id, 'approve', 'monthly-performance-report', `${parsed.data.month}:${result.lastInsertRowid}`);
+  const item = db.prepare(`SELECT s.id, s.month, s.created_at, u.display_name AS created_by
+    FROM report_snapshots s LEFT JOIN users u ON u.id = s.created_by WHERE s.id = ?`).get(result.lastInsertRowid);
+  res.status(201).json({ snapshot: item });
+});
 app.get('/api/contract-kpis/project', requireRole(...roles), (req, res) => {
   try {
     res.json(contractKpiService.projectMonth(req.query.today || new Date()));
@@ -912,7 +1215,7 @@ app.put('/api/contract-kpis/attached-override', requireRole('admin'), (req, res)
   db.prepare(`INSERT INTO attached_override (attached_school_number, parent_school_number)
     VALUES (?, ?) ON CONFLICT(attached_school_number) DO UPDATE SET
     parent_school_number=excluded.parent_school_number, updated_at=CURRENT_TIMESTAMP`).run(attachedNumber, parentNumber);
-  refreshAttachedSchoolParents();
+  refreshAttachedSchoolParents(req.user.id, 'attached_school_link');
   audit(req.user.id, 'link', 'attached-school', `${attachedNumber}:${parentNumber}`);
   res.json({ ok: true, attachedSchoolNumber: attachedNumber, parentSchoolNumber: parentNumber });
 });
@@ -920,7 +1223,7 @@ app.delete('/api/contract-kpis/attached-override/:schoolNumber', requireRole('ad
   const attachedNumber = normalizeSchoolNumber(req.params.schoolNumber);
   const result = db.prepare('DELETE FROM attached_override WHERE attached_school_number = ?').run(attachedNumber);
   if (!result.changes) return res.status(404).json({ error: 'لا يوجد ربط يدوي لهذه المدرسة.' });
-  refreshAttachedSchoolParents();
+  refreshAttachedSchoolParents(req.user.id, 'attached_school_link');
   audit(req.user.id, 'unlink-override', 'attached-school', attachedNumber);
   res.json({ ok: true });
 });
@@ -935,13 +1238,17 @@ app.patch('/api/tickets/:id/kpi', requireRole('admin'), (req, res) => {
   if (parsed.data.kpiOverride && !db.prepare('SELECT 1 FROM kpis WHERE code = ?').get(parsed.data.kpiOverride)) {
     return res.status(400).json({ error: 'رمز المؤشر المصحح غير موجود.' });
   }
-  const ticket = db.prepare('SELECT excluded_from_kpi, exclusion_reason, kpi_override FROM tickets WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+  const ticket = db.prepare('SELECT id, excluded_from_kpi, exclusion_reason, kpi_override FROM tickets WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
   if (!ticket) return res.status(404).json({ error: 'البلاغ غير موجود.' });
+  const before = getTicketHistoryState(ticket.id);
   const excluded = parsed.data.excludedFromKpi === undefined ? ticket.excluded_from_kpi : Number(parsed.data.excludedFromKpi);
   const reason = parsed.data.excludedFromKpi === false ? '' : parsed.data.exclusionReason ?? ticket.exclusion_reason;
   const override = parsed.data.kpiOverride === undefined ? ticket.kpi_override : parsed.data.kpiOverride;
   db.prepare('UPDATE tickets SET excluded_from_kpi = ?, exclusion_reason = ?, kpi_override = ? WHERE id = ?')
     .run(excluded, reason, override, req.params.id);
+  recordTicketHistory(ticket.id, before, getTicketHistoryState(ticket.id), {
+    actorId: req.user.id, source: 'ticket_edit', reference: 'تصنيف مؤشرات العقد'
+  });
   audit(req.user.id, 'update-kpi-classification', 'ticket', req.params.id);
   res.json({ ok: true });
 });
@@ -1127,6 +1434,7 @@ app.patch('/api/schools/:schoolNumber', requireRole('admin', 'receiver'), (req, 
     counts_in_kpi: Number(countsInContractKpi(parsed.data.buildingType ?? current.building_type)),
     has_elevator: parsed.data.hasElevator === undefined ? current.has_elevator : Number(parsed.data.hasElevator)
   };
+  const ticketSnapshot = captureTicketHistory(db.prepare('SELECT id FROM tickets').all().map(({ id }) => id));
   try {
     db.transaction(() => {
       db.prepare(`UPDATE schools SET school_number = ?, name = ?, supervisor = ?, region = ?, school_type = ?, building_type = ?,
@@ -1146,8 +1454,11 @@ app.patch('/api/schools/:schoolNumber', requireRole('admin', 'receiver'), (req, 
           WHERE matched_school_number = ?`).run(updatedNumber, currentNumber);
       }
     })();
-    refreshAttachedSchoolParents();
-    refreshTicketSchoolMatches();
+    refreshAttachedSchoolParents(req.user.id, 'school_edit', false);
+    refreshTicketSchoolMatches(req.user.id, 'school_edit', false);
+    recordTicketHistorySnapshot(ticketSnapshot, {
+      actorId: req.user.id, source: 'school_edit', reference: currentNumber
+    });
   } catch (error) {
     if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
       return res.status(409).json({ error: 'رقم المدرسة مسجل مسبقًا.' });
@@ -1263,17 +1574,19 @@ function storeSchools(rows, userId = null, source = 'sync') {
       recordSchoolChange(school.number, userId, source, before, after);
     });
   })(rows);
-  refreshTicketSchoolMatches();
-  refreshAttachedSchoolParents();
+  refreshTicketSchoolMatches(userId, source === 'manual' ? 'school_edit' : 'school_sync');
+  refreshAttachedSchoolParents(userId, source === 'manual' ? 'school_edit' : 'school_sync');
   return { renumbered: renumberedSchools.length };
 }
 function schoolCoordinates(school) {
   const sourceData = JSON.parse(school.source_data || '[]');
   return getSchoolMapCoordinates(sourceData) || { latitude: null, longitude: null };
 }
-function refreshAttachedSchoolParents() {
+function refreshAttachedSchoolParents(actorId = null, source = 'school_sync', recordHistory = true) {
   const schools = db.prepare('SELECT school_number, building_type, counts_in_kpi, has_elevator, source_data FROM schools').all()
     .map((school) => ({ ...school, ...schoolCoordinates(school) }));
+  const existingParents = new Map(db.prepare('SELECT school_number, parent_school_id FROM schools').all()
+    .map((school) => [school.school_number, school.parent_school_id]));
   const parentCandidates = schools.filter((school) =>
     normalizeKpiText(school.building_type) !== normalizeKpiText('مشترك ملحق'));
   const schoolByNumber = new Map(schools.map((school) => [school.school_number, school]));
@@ -1295,6 +1608,15 @@ function refreshAttachedSchoolParents() {
         parent,
         school.school_number
       );
+      const previousParent = existingParents.get(school.school_number) || null;
+      if (recordHistory && parent !== previousParent) {
+        const tickets = db.prepare('SELECT id FROM tickets WHERE matched_school_number = ?').all(school.school_number);
+        for (const { id } of tickets) {
+          recordTicketHistory(id, { parent_school_id: previousParent }, { parent_school_id: parent }, {
+            actorId, source, reference: school.school_number
+          });
+        }
+      }
     }
   })(schools);
 }
@@ -1355,10 +1677,18 @@ app.put('/api/settings', requireRole('admin'), (req, res) => {
     db.prepare("INSERT INTO app_settings (key, value) VALUES ('schools_url', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(parsed.data.schoolsUrl);
     audit(req.user.id, 'update', 'settings', 'schools_url');
   }
+  const slaHistorySnapshot = parsed.data.criticalHours !== undefined || parsed.data.mediumHours !== undefined
+    ? captureTicketHistory(db.prepare('SELECT id FROM tickets').all().map(({ id }) => id))
+    : null;
   for (const [field, key] of [['criticalHours', 'sla_critical_hours'], ['mediumHours', 'sla_medium_hours']]) {
     if (parsed.data[field] === undefined) continue;
     db.prepare('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, String(parsed.data[field]));
     audit(req.user.id, 'update', 'settings', key);
+  }
+  if (slaHistorySnapshot) {
+    recordTicketHistorySnapshot(slaHistorySnapshot, {
+      actorId: req.user.id, source: 'sla_settings', reference: 'تعديل مدد SLA'
+    });
   }
   if (parsed.data.priorityMatrixEnabled !== undefined) {
     const enabled = String(parsed.data.priorityMatrixEnabled);

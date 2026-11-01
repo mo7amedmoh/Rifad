@@ -121,6 +121,18 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
     body: JSON.stringify({ csv: 'رقم المدرسة,اسم المدرسة,المشرف المسؤول,المنطقة\nM-123456,مدرسة تجريبية,مشرف تجريبي,الرياض' })
   });
   assert.equal(schoolRefreshWithoutType.status, 200);
+  const changedSlaSettings = await fetch(`${base}/api/settings`, {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'X-CSRF-Token': authData.csrfToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ criticalHours: 30 })
+  });
+  assert.equal(changedSlaSettings.status, 200);
+  const restoredSlaSettings = await fetch(`${base}/api/settings`, {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'X-CSRF-Token': authData.csrfToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ criticalHours: 24 })
+  });
+  assert.equal(restoredSlaSettings.status, 200);
 
   const nameMatchedResponse = await fetch(`${base}/api/tickets?q=CASE-NAME-MATCH-1`, { headers: { Cookie: cookie } });
   const nameMatched = await nameMatchedResponse.json();
@@ -365,10 +377,30 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
   assert.equal(schoolReport.byHour.length, 24);
   assert.equal(schoolReport.byWeekday.length, 7);
   assert.equal(schoolReport.monthlyActivity.reduce((sum, month) => sum + month.total, 0), 4);
+  const changedImportResponse = await fetch(`${base}/api/import/tickets`, {
+    method: 'POST',
+    headers: { Cookie: cookie, 'X-CSRF-Token': authData.csrfToken, 'Content-Type': 'text/csv; charset=utf-8' },
+    body: [
+      '"مُعرّف الحالة","الأولوية","الحالة","تاريخ الإنشاء","حالة SLM","الوصف","الطبقة 3 للفئة","رقم المدرسة","اسم المبنى"',
+      `"CASE-TEST-1","حرج","قيد المعالجة","${createdAt}","ضمن المهلة","وصف اختباري","أعمال صيانة","S- ١٢٣ ٤٥٦","اسم مبنى مختلف"`
+    ].join('\n')
+  });
+  assert.equal(changedImportResponse.status, 200);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM ticket_history h
+    JOIN tickets t ON t.id = h.ticket_id WHERE t.case_id = 'CASE-TEST-1' AND h.source = 'ticket_import'`).get().count, 1);
   const ticketDetailsResponse = await fetch(`${base}/api/tickets/${ticketId}/details`, { headers: { Cookie: cookie } });
   assert.equal(ticketDetailsResponse.status, 200);
   const ticketDetails = (await ticketDetailsResponse.json()).item;
   assert.equal(ticketDetails.school_type, 'حكومية');
+  assert.ok(ticketDetails.history.some((entry) => entry.source === 'ticket_created'));
+  const importedStateChange = ticketDetails.history.find((entry) => entry.source === 'ticket_import');
+  assert.equal(importedStateChange.changes.status.before, 'قيد التنفيذ');
+  assert.equal(importedStateChange.changes.status.after, 'قيد المعالجة');
+  assert.equal(importedStateChange.changes.slm_status.after, 'ضمن المهلة');
+  assert.ok(ticketDetails.history.some((entry) => entry.source === 'school_sync' &&
+    entry.changes.matched_school_number?.after === 'M-123456'));
+  assert.ok(ticketDetails.history.some((entry) => entry.source === 'sla_settings' &&
+    entry.changes.sla_policy_hours?.after === 30));
   assert.equal(ticketDetails.building_type, 'مبنى تعليمي');
   assert.equal(ticketDetails.occupancy_size, '350');
   assert.equal(ticketDetails.layer3, 'أعمال صيانة');
@@ -393,6 +425,10 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
   assert.equal(correctedTicket.school_number, '123456');
   assert.equal(correctedTicket.school_name, 'مدرسة تجريبية مصححة');
   assert.equal(correctedTicket.supervisor, 'مشرف مصحح');
+  const correctedTicketDetails = await fetch(`${base}/api/tickets/${ticketId}/details`, { headers: { Cookie: cookie } });
+  const correctedTicketHistory = (await correctedTicketDetails.json()).item.history;
+  assert.ok(correctedTicketHistory.some((entry) => entry.source === 'school_edit' &&
+    entry.changes.matched_school_number?.after === '654321'));
   assert.equal(summary.topOpenSchools[0].school_name, 'مدرسة تجريبية');
   assert.equal(summary.topOpenSchools[0].total, 3);
   assert.equal(summary.repeatedBySchool[0].school_name, 'مدرسة تجريبية');
@@ -610,10 +646,10 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
       method: 'POST',
       headers: { Cookie: cookie, 'X-CSRF-Token': updatedSessionData.csrfToken, 'Content-Type': 'application/json' },
       body: JSON.stringify({ csv: [
-        'رقم المدرسة,اسم المدرسة,نوع المبنى,مقاول المصاعد,الشماليات,الشرقيات,نوع المدرسة,الحي',
-        '300001,مدرسة أم,مستقل,شركة المصاعد,46.70000,24.70000,بنين,النخيل',
-        '300002,مدرسة أم ثانية,مشترك أساسي,لا ينطبق,46.70020,24.70020,بنات,الروضة',
-        '300003,مدرسة ملحقة,مشترك ملحق,لا ينطبق,46.70001,24.70001,بنين,النخيل'
+        'رقم المدرسة,اسم المدرسة,المشرف المسؤول,نوع المبنى,مقاول المصاعد,الشماليات,الشرقيات,نوع المدرسة,الحي',
+        '300001,مدرسة أم,مشرف الرياض,مستقل,شركة المصاعد,46.70000,24.70000,بنين,النخيل',
+        '300002,مدرسة أم ثانية,مشرف الرياض,مشترك أساسي,لا ينطبق,46.70020,24.70020,بنات,الروضة',
+        '300003,مدرسة ملحقة,مشرف الرياض,مشترك ملحق,لا ينطبق,46.70001,24.70001,بنين,الملقا'
       ].join('\n') })
     });
     assert.equal(contractSchoolsImport.status, 200);
@@ -642,6 +678,92 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
       ].join('\n')
     });
     assert.equal(attachedReportImport.status, 200);
+    const analysisSummaryResponse = await nativeFetch(`${base}/api/summary?period=all`, { headers: { Cookie: cookie } });
+    assert.equal(analysisSummaryResponse.status, 200);
+    const analysisSummary = await analysisSummaryResponse.json();
+    assert.deepEqual(analysisSummary.schoolHeatmap[0], {
+      name: 'مدرسة أم',
+      supervisor: 'مشرف الرياض',
+      total: 1,
+      breached: 0
+    });
+    assert.deepEqual(analysisSummary.neighborhoodHeatmap[0], { name: 'النخيل', total: 1, breached: 0 });
+    assert.equal(analysisSummary.ticketTimeHeatmap.length, 7);
+    assert.ok(analysisSummary.ticketTimeHeatmap.every((day) => day.cells.length === 24));
+    assert.equal(analysisSummary.ticketTimeHeatmap.flatMap((day) => day.cells).reduce((sum, cell) => sum + cell.total, 0), 1);
+    assert.equal(analysisSummary.ticketTimeHeatmap[4].cells[15].total, 1);
+    assert.deepEqual(analysisSummary.schoolBreachHeatmap, []);
+    assert.deepEqual(analysisSummary.neighborhoodBreachHeatmap, []);
+    assert.deepEqual(analysisSummary.supervisorWorkload.find((item) => item.name === 'مشرف الرياض'), {
+      name: 'مشرف الرياض',
+      schoolCount: 2,
+      tickets: 1,
+      breached: 0,
+      ticketsPerSchool: 0.5,
+      breachesPerSchool: 0
+    });
+    const reportBreachImport = await nativeFetch(`${base}/api/import/tickets`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'X-CSRF-Token': updatedSessionData.csrfToken, 'Content-Type': 'text/csv' },
+      body: [
+        '"مُعرّف الحالة","الأولوية","الحالة","تاريخ الإنشاء","حالة SLM","الوصف","الطبقة 3 للفئة","رقم المدرسة","اسم المبنى"',
+        '"CASE-REPORT-BREACH","عالي","مفتوح","2026-10-20T12:00:00.000Z","تم اختراقه","اختبار التقرير","أعمال كهربائية","300001","مدرسة أم"'
+      ].join('\n')
+    });
+    assert.equal(reportBreachImport.status, 200);
+    const monthlyReportResponse = await nativeFetch(`${base}/api/monthly-performance-report?month=2026-10`, { headers: { Cookie: cookie } });
+    assert.equal(monthlyReportResponse.status, 200);
+    const monthlyReport = await monthlyReportResponse.json();
+    assert.equal(monthlyReport.report.contractKpis.month, '2026-10');
+    assert.equal(monthlyReport.report.summary.missingBreachReason, 1);
+    assert.equal(monthlyReport.report.breachedTickets.find((ticket) => ticket.case_id === 'CASE-REPORT-BREACH').breach_reason, 'غير مسجل');
+    assert.ok(monthlyReport.report.openTickets.some((ticket) => ticket.case_id === 'CASE-REPORT-BREACH'));
+    const manualSectionsSave = await nativeFetch(`${base}/api/monthly-performance-report/manual-sections`, {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'X-CSRF-Token': updatedSessionData.csrfToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ month: '2026-10', sections: [{ key: 'inventory', text: 'مخزون تجريبي' }] })
+    });
+    assert.equal(manualSectionsSave.status, 200);
+    const manualSectionsData = await manualSectionsSave.json();
+    assert.equal(manualSectionsData.manualSections.inventory, 'مخزون تجريبي');
+    const snapshotSave = await nativeFetch(`${base}/api/monthly-performance-report/snapshots`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'X-CSRF-Token': updatedSessionData.csrfToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        month: '2026-10',
+        data: {
+          month: '2026-10',
+          ...monthlyReport,
+          report: { contractKpis: { indicators: { 'CM.1': { achieved_pct: 1 } } } },
+          manualSections: { inventory: 'بيانات عميل غير موثوقة' },
+          narrative: 'نسخة محفوظة للاختبار'
+        }
+      })
+    });
+    assert.equal(snapshotSave.status, 201);
+    const approvedSnapshot = await snapshotSave.json();
+    assert.ok(approvedSnapshot.snapshot.id);
+    const changeManualKpi = await nativeFetch(`${base}/api/contract-kpis/results`, {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'X-CSRF-Token': updatedSessionData.csrfToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ month: '2026-10', results: [{ kpiCode: 'CM.1', achievedPct: 25, fineCount: 0 }] })
+    });
+    assert.equal(changeManualKpi.status, 200);
+    const savedSnapshotResponse = await nativeFetch(`${base}/api/monthly-performance-report/snapshots/${approvedSnapshot.snapshot.id}`, {
+      headers: { Cookie: cookie }
+    });
+    assert.equal(savedSnapshotResponse.status, 200);
+    const savedSnapshot = await savedSnapshotResponse.json();
+    assert.equal(savedSnapshot.snapshot.status, 'approved');
+    assert.equal(savedSnapshot.snapshot.data.report.contractKpis.indicators['CM.1'].achieved_pct, 80);
+    assert.equal(savedSnapshot.snapshot.data.manualSections.inventory, 'مخزون تجريبي');
+    const restoreManualKpi = await nativeFetch(`${base}/api/contract-kpis/results`, {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'X-CSRF-Token': updatedSessionData.csrfToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ month: '2026-10', results: [{ kpiCode: 'CM.1', achievedPct: 80, fineCount: 2 }] })
+    });
+    assert.equal(restoreManualKpi.status, 200);
+    db.prepare('UPDATE tickets SET deleted_at = CURRENT_TIMESTAMP WHERE case_id = ?').run('CASE-REPORT-BREACH');
     const contractMonthResponse = await nativeFetch(`${base}/api/contract-kpis/month?month=2026-10`, { headers: { Cookie: cookie } });
     assert.equal(contractMonthResponse.status, 200);
     const contractMonth = await contractMonthResponse.json();

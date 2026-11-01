@@ -70,6 +70,16 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_tickets_created ON tickets(created_at);
   CREATE INDEX IF NOT EXISTS idx_tickets_open ON tickets(deleted_at, status);
   CREATE INDEX IF NOT EXISTS idx_tickets_school ON tickets(school_number);
+  CREATE TABLE IF NOT EXISTS ticket_history (
+    id INTEGER PRIMARY KEY,
+    ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+    actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    source TEXT NOT NULL,
+    reference TEXT NOT NULL DEFAULT '',
+    changes TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_ticket_history_ticket ON ticket_history(ticket_id, id DESC);
   CREATE TABLE IF NOT EXISTS import_runs (
     id INTEGER PRIMARY KEY,
     imported_by INTEGER REFERENCES users(id),
@@ -157,6 +167,21 @@ db.exec(`
     PRIMARY KEY (month, kpi_code)
   );
   CREATE INDEX IF NOT EXISTS idx_kpi_results_month ON kpi_results(month);
+  CREATE TABLE IF NOT EXISTS report_manual_sections (
+    month TEXT NOT NULL,
+    section_key TEXT NOT NULL,
+    text TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (month, section_key)
+  );
+  CREATE TABLE IF NOT EXISTS report_snapshots (
+    id INTEGER PRIMARY KEY,
+    month TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    data TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_report_snapshots_month ON report_snapshots(month, id DESC);
 `);
 
 const ticketColumns = db.prepare('PRAGMA table_info(tickets)').all().map((column) => column.name);

@@ -2,7 +2,9 @@
   "name": "rifad-incident-manager",
   "version": "1.0.0",
   "private": true,
-  "engines": { "node": ">=22.5.0" },
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "Arabic-first incident and SLA management for Shalfa",
   "license": "UNLICENSED",
   "author": "Mohamed Elshenawy",
@@ -18,6 +20,7 @@
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "csv-parse": "^7.0.3",
+    "docx": "^9.15.1",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "express-rate-limit": "^7.5.0",

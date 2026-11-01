@@ -1,21 +1,24 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { toBlob, toPng } from 'html-to-image';
 import ContractKpis from './ContractKpis';
 import {
   Activity, AlertCircle, AlertTriangle, ArrowDownToLine, ArrowLeft,
   Building2, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight,
-  ClipboardList, Clock3, CloudUpload, FileSpreadsheet, Filter, LayoutDashboard, Share2,
+  ClipboardList, Clock3, CloudUpload, FileSpreadsheet, FileText, Filter, LayoutDashboard, Share2,
   LockKeyhole, LogOut, MapPin, Menu, Plus, Search, Settings, ShieldCheck, Sparkles, Users,
   Wrench, X
 } from 'lucide-react';
 import './styles.css';
+
+const MonthlyPerformanceReport = React.lazy(() => import('./MonthlyPerformanceReport'));
 
 const REASONS = ['تأخر توريد قطع', 'موافقة الاستشاري', 'تعذر دخول المدرسة', 'تأخر إقفال على المنصة', 'نقص عمالة/فنيين', 'تصنيف خاطئ للبلاغ', 'صهريج/خدمة خارجية', 'أخرى'];
 const NAV = [
   { id: 'dashboard', title: 'لوحة التحكم', icon: LayoutDashboard },
   { id: 'tickets', title: 'قاعدة بيانات البلاغات', icon: ClipboardList },
   { id: 'analysis', title: 'دراسة وتحليلات', icon: Activity },
+  { id: 'monthly-report', title: 'تقرير الأداء الشهري', icon: FileText },
   { id: 'schools', title: 'قاعدة بيانات المدارس', icon: Building2 },
   { id: 'account', title: 'حسابي', icon: Users },
   { id: 'users', title: 'إدارة الحسابات', icon: Users, admin: true },
@@ -128,6 +131,7 @@ function App() {
         <div className="page-content">
           {currentPage === 'dashboard' && <Dashboard period={period} setPeriod={setPeriod} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} notify={notify} />}
           {currentPage === 'analysis' && <Analysis period={period} setPeriod={setPeriod} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} session={session} csrf={csrf} notify={notify} />}
+          {currentPage === 'monthly-report' && <Suspense fallback={<PageLoader />}><MonthlyPerformanceReport csrf={csrf} session={session} request={request} notify={notify} /></Suspense>}
           {currentPage === 'tickets' && <Tickets session={session} csrf={csrf} notify={notify} />}
           {currentPage === 'schools' && <Schools csrf={csrf} session={session} notify={notify} />}
           {currentPage === 'account' && <AccountPage session={session} csrf={csrf} notify={notify} onUpdated={(data) => { setSession(data.user); setCsrf(data.csrfToken); }} />}
@@ -194,22 +198,63 @@ function periodLabel(period, selectedMonth) {
   return `شهر ${new Intl.DateTimeFormat('ar-SA', { month: 'long', year: 'numeric', timeZone: 'Asia/Riyadh' }).format(date)}`;
 }
 
+function preserveSvgStylesForExport(source, clone) {
+  const properties = [
+    'fill', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin',
+    'stroke-dasharray', 'opacity', 'color', 'font-family', 'font-size', 'font-weight',
+    'font-style', 'text-anchor', 'dominant-baseline', 'letter-spacing'
+  ];
+  const sourceNodes = [source, ...source.querySelectorAll('svg, svg *')];
+  const clonedNodes = [clone, ...clone.querySelectorAll('svg, svg *')];
+  sourceNodes.forEach((sourceNode, index) => {
+    const clonedNode = clonedNodes[index];
+    if (!clonedNode || sourceNode.namespaceURI !== 'http://www.w3.org/2000/svg') return;
+    const computed = window.getComputedStyle(sourceNode);
+    for (const property of properties) {
+      const value = computed.getPropertyValue(property);
+      if (value) clonedNode.style.setProperty(property, value);
+    }
+    if (sourceNode.classList.contains('compliance-line')) {
+      clonedNode.style.setProperty('stroke-dasharray', 'none');
+      clonedNode.style.setProperty('stroke-dashoffset', '0');
+      clonedNode.style.setProperty('animation', 'none');
+    }
+    if (sourceNode.classList.contains('compliance-point')) {
+      clonedNode.style.setProperty('opacity', '1');
+      clonedNode.style.setProperty('animation', 'none');
+    }
+  });
+}
+
 function PeriodControls({ period, setPeriod, selectedMonth, setSelectedMonth }) {
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const activeMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(selectedMonth || '') ? selectedMonth : currentMonth;
+  const shiftMonth = (offset) => {
+    const [year, month] = activeMonth.split('-').map(Number);
+    const nextMonth = new Date(Date.UTC(year, month - 1 + offset, 1));
+    setSelectedMonth(nextMonth.toISOString().slice(0, 7));
+    setPeriod('month');
+  };
   return <div className="period-controls">
     <div className="segmented" aria-label="الفترة الزمنية">
       <button className={period === 'week' ? 'selected' : ''} aria-pressed={period === 'week'} onClick={() => setPeriod('week')}>أسبوع</button>
       <button className={period === 'month' ? 'selected' : ''} aria-pressed={period === 'month'} onClick={() => setPeriod('month')}>شهر</button>
       <button className={period === 'all' ? 'selected' : ''} aria-pressed={period === 'all'} onClick={() => setPeriod('all')}>تراكمي</button>
     </div>
+    <div className={`month-timeline ${period !== 'month' ? 'month-timeline-disabled' : ''}`} aria-label="التنقل بين الأشهر">
+      <button type="button" className="month-timeline-nav" aria-label="الشهر السابق" title="الشهر السابق" disabled={period !== 'month'} onClick={() => shiftMonth(-1)}><ChevronRight size={16} /></button>
     <label className={`month-picker ${period !== 'month' ? 'month-picker-disabled' : ''}`}>
       <CalendarDays size={15} />
       <span className="visually-hidden">اختر شهر التحليل</span>
-      <input type="month" aria-label="اختر شهر التحليل" value={selectedMonth} disabled={period !== 'month'} max={new Date().toISOString().slice(0, 7)} onChange={(event) => {
+      <input type="month" aria-label="اختر شهر التحليل" value={activeMonth} disabled={period !== 'month'} max={currentMonth} onChange={(event) => {
         if (!event.target.value) return;
         setSelectedMonth(event.target.value);
         setPeriod('month');
       }} />
     </label>
+      <button type="button" className="month-timeline-nav" aria-label="الشهر التالي" title="الشهر التالي" disabled={period !== 'month' || activeMonth >= currentMonth} onClick={() => shiftMonth(1)}><ChevronLeft size={16} /></button>
+      {activeMonth !== currentMonth && <button type="button" className="month-timeline-current" onClick={() => { setSelectedMonth(currentMonth); setPeriod('month'); }}>الشهر الحالي</button>}
+    </div>
   </div>;
 }
 
@@ -417,6 +462,7 @@ function Analysis({ period, setPeriod, selectedMonth, setSelectedMonth, session,
     try {
       if (!reportRef.current) throw new Error('تعذر تجهيز محتوى التحليلات.');
       captureNode = reportRef.current.cloneNode(true);
+      preserveSvgStylesForExport(reportRef.current, captureNode);
       captureNode.classList.add('analysis-export-capture');
       const bounds = reportRef.current.getBoundingClientRect();
       Object.assign(captureNode.style, {
@@ -424,6 +470,7 @@ function Analysis({ period, setPeriod, selectedMonth, setSelectedMonth, session,
         width: `${Math.max(bounds.width, 1200)}px`, maxWidth: 'none', height: 'auto',
         opacity: '0', pointerEvents: 'none', overflow: 'visible'
       });
+      captureNode.querySelectorAll('details').forEach((details) => { details.open = true; });
       document.body.append(captureNode);
       await document.fonts.ready;
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -460,9 +507,9 @@ function Analysis({ period, setPeriod, selectedMonth, setSelectedMonth, session,
       <div className="analysis-report-brand"><Activity size={20} /><div><strong>رِفاد · دراسة وتحليلات</strong><span>{periodLabel(period, selectedMonth)} · {formatDate(new Date(), { day: 'numeric', month: 'long', year: 'numeric' })}</span></div></div>
       <div className="analysis-callout"><Activity size={18} /><div><strong>مؤشر الالتزام للفترة</strong><span>البلاغات غير المخترقة ÷ إجمالي البلاغات غير الملغاة المنشأة خلال الفترة.</span></div><b>{fmt.format(m.compliance || 0)}%</b></div>
       <div className="analysis-metrics"><MiniMetric title="إجمالي البلاغات" value={m.total} icon={ClipboardList} /><MiniMetric title="مفتوحة" value={m.open} icon={Clock3} /><MiniMetric title="مغلقة" value={m.closed} icon={CheckCircle2} /><MiniMetric title="مخترقة" value={m.breached} icon={AlertTriangle} /></div>
-      <div className="panel chart-panel monthly-compliance-panel"><div className="panel-heading"><div><h2>مقارنة الالتزام الشهري بـ SLA</h2><p>نسبة البلاغات غير المخترقة من البلاغات غير الملغاة لكل شهر (آخر 12 شهرًا)</p></div></div><MonthlyComplianceChart rows={summary?.monthlyCompliance || []} /></div>
+      <div className="panel chart-panel monthly-compliance-panel"><div className="panel-heading"><div><h2>مقارنة الالتزام الشهري بـ SLA</h2><p>اختر نقطة لفتح تحليلات ذلك الشهر، أو مرّر عليها لعرض التفاصيل.</p></div></div><MonthlyComplianceChart rows={summary?.monthlyCompliance || []} selectedMonth={selectedMonth} onSelectMonth={(month) => { setSelectedMonth(month); setPeriod('month'); }} /></div>
       <div className="dashboard-grid"><CompliancePanel metrics={m} /><QuickIndicators metrics={m} /></div>
-      <div className="dashboard-grid"><section className="panel chart-panel"><div className="panel-heading"><div><h2>تحليل الطبقات</h2><p>حجم البلاغات وحالات SLA لكل طبقة</p></div></div><DetailedBarList rows={summary?.byLayer || []} /></section><section className="panel chart-panel"><div className="panel-heading"><div><h2>تحليل المشرفين</h2><p>الإجمالي، المفتوح، المغلق، والمخترق ونسبة الالتزام</p></div></div><SupervisorAnalysis rows={summary?.bySupervisor || []} /></section></div>
+      <div className="dashboard-grid analysis-comparison-grid"><section className="panel chart-panel analysis-layer-panel"><div className="panel-heading"><div><h2>تحليل الطبقات</h2><p>حجم البلاغات وحالات SLA لكل طبقة</p></div></div><DetailedBarList rows={summary?.byLayer || []} /></section><section className="panel chart-panel analysis-supervisor-panel"><div className="panel-heading"><div><h2>تحليل المشرفين</h2><p>الإجمالي، المفتوح، المغلق، والمخترق ونسبة الالتزام</p></div></div><SupervisorAnalysis rows={summary?.bySupervisor || []} /></section></div>
       <div className="dashboard-grid">
         <section className="panel chart-panel"><div className="panel-heading"><div><h2>المدارس الأكثر استقبالًا للبلاغات المفتوحة</h2><p>ترتيب المدارس حسب عدد البلاغات المفتوحة في الفترة</p></div></div><SchoolActivityList rows={summary?.topOpenSchools || []} /></section>
         <section className="panel chart-panel"><div className="panel-heading"><div><h2>البلاغات الأكثر تكرارًا لكل مدرسة</h2><p>تكرار البلاغات حسب تصنيف الطبقة الثالثة</p></div></div><RepeatedTicketList rows={summary?.repeatedBySchool || []} /></section>
@@ -471,6 +518,17 @@ function Analysis({ period, setPeriod, selectedMonth, setSelectedMonth, session,
         <section className="panel chart-panel"><div className="panel-heading"><div><h2>البلاغات المخترقة حسب الطبقة</h2><p>عدد البلاغات المخترقة لكل تصنيف</p></div></div><BreachBreakdownList rows={summary?.breachedByLayer || []} empty="لا توجد بلاغات مخترقة في الفترة." /></section>
         <section className="panel chart-panel"><div className="panel-heading"><div><h2>البلاغات المخترقة حسب اليوم</h2><p>تاريخ إنشاء البلاغات المخترقة ضمن الفترة</p></div></div><BreachBreakdownList rows={summary?.breachedByDay || []} empty="لا توجد بلاغات مخترقة في الفترة." /></section>
       </div>
+      <section className="analysis-heatmap-section">
+        <div className="analysis-section-heading"><div><span className="eyebrow">رصد مصادر الضغط</span><h2>خريطة حرارية للمدارس والأوقات</h2><p>المدارس والأحياء الأعلى في البلاغات والاختراقات، وأوقات تركز البلاغات، ومقارنة حمل المشرفين بعدد مدارسهم.</p></div></div>
+        <div className="dashboard-grid analysis-heatmap-grid">
+          <section className="panel chart-panel"><div className="panel-heading"><div><h3>المدارس الأكثر استقبالًا للبلاغات</h3><p>ترتيب حسب إجمالي البلاغات مع توضيح الاختراقات</p></div></div><DetailedBarList rows={summary?.schoolHeatmap || []} empty="لا توجد بلاغات مرتبطة بمدارس في الفترة." /></section>
+          <section className="panel chart-panel"><div className="panel-heading"><div><h3>المدارس الأعلى اختراقًا</h3><p>ترتيب المدارس حسب عدد البلاغات المخترقة</p></div></div><DetailedBarList rows={summary?.schoolBreachHeatmap || []} metric="breached" empty="لا توجد بلاغات مخترقة مرتبطة بمدارس." /></section>
+          <section className="panel chart-panel"><div className="panel-heading"><div><h3>الأحياء الأكثر استقبالًا للبلاغات</h3><p>تجميع البلاغات بحسب حي المدرسة</p></div></div><DetailedBarList rows={summary?.neighborhoodHeatmap || []} empty="لا تتوفر بيانات أحياء مرتبطة ببلاغات." /></section>
+          <section className="panel chart-panel"><div className="panel-heading"><div><h3>الأحياء الأعلى اختراقًا</h3><p>ترتيب الأحياء حسب عدد البلاغات المخترقة</p></div></div><DetailedBarList rows={summary?.neighborhoodBreachHeatmap || []} metric="breached" empty="لا توجد بلاغات مخترقة مرتبطة بأحياء." /></section>
+          <section className="panel chart-panel analysis-time-heatmap-panel"><div className="panel-heading"><div><h3>تراكم البلاغات حسب اليوم والساعة</h3><p>وقت الإنشاء بتوقيت الرياض؛ مرّر المؤشر لمعرفة عدد الاختراقات أيضًا.</p></div></div><TicketTimeHeatmap rows={summary?.ticketTimeHeatmap || []} /></section>
+          <section className="panel chart-panel supervisor-workload-panel"><div className="panel-heading"><div><h3>حمل المشرف مقابل عدد مدارسه</h3><p>معدل البلاغات لكل مدرسة مؤهلة (مستقل أو مشترك أساسي)</p></div></div><SupervisorWorkloadList rows={summary?.supervisorWorkload || []} /></section>
+        </div>
+      </section>
       <ContractKpis request={request} csrf={csrf} isAdmin={session.role === 'admin'} canEditResults={session.role !== 'viewer'} notify={notify} />
       <div className="data-footnote"><AlertCircle size={15} />تُحتسب التحليلات للمدارس المطابقة بالرقم الوزاري أو باسم مدرسة فريد. يعبّر الالتزام الشهري عن الحالة الحالية لبلاغات كل شهر.</div>
       <div className="analysis-report-footer">رِفاد · Shalfa · © Mohamed Elshenawy · Internal Private</div>
@@ -508,7 +566,8 @@ function SupervisorPerformance({ rows, best }) {
     <div className="performance-note">الأفضل أداءً هو الأعلى التزامًا بـ SLA، وعند التعادل يُرجّح عدد البلاغات المغلقة ثم متوسط سرعة الحل.</div>
   </section>;
 }
-function MonthlyComplianceChart({ rows }) {
+function MonthlyComplianceChart({ rows, selectedMonth, onSelectMonth }) {
+  const [activeKey, setActiveKey] = useState(null);
   const width = 900;
   const height = 340;
   const plot = { left: 58, right: 24, top: 24, bottom: 68 };
@@ -531,16 +590,45 @@ function MonthlyComplianceChart({ rows }) {
   }
   if (segment.length > 1) paths.push(segment);
   const hasData = points.some((point) => point.y !== null);
-  const labelIndexes = new Set([0, 2, 4, 6, 8, 10, 11]);
+  const activePoint = points.find((point) => point.key === activeKey) ||
+    points.find((point) => point.key === selectedMonth && point.y !== null);
   return <div className="monthly-chart-wrap">
-    {hasData ? <svg className="monthly-compliance-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="مخطط خطي لمقارنة نسبة الالتزام الشهري">
+    {hasData ? <svg className="monthly-compliance-chart" viewBox={`0 0 ${width} ${height}`} role="group" aria-label="مخطط تفاعلي لمقارنة نسبة الالتزام الشهري">
       {[0, 25, 50, 75, 100].map((value) => {
         const y = plot.top + (100 - value) * plotHeight / 100;
         return <g key={value}><line x1={plot.left} x2={width - plot.right} y1={y} y2={y} className="chart-grid-line" /><text x={plot.left - 10} y={y + 5} textAnchor="end" className="chart-axis-label">{value}%</text></g>;
       })}
       {paths.map((path, index) => <polyline key={index} points={path.map((point) => `${point.x},${point.y}`).join(' ')} className="compliance-line" />)}
-      {points.map((point, index) => point.y === null ? null : <g key={point.key}><circle cx={point.x} cy={point.y} r="5" className="compliance-point"><title>{point.label}: {fmt.format(point.compliance)}% ({fmt.format(point.total)} بلاغ)</title></circle>{labelIndexes.has(index) && <text x={point.x} y={height - 29} textAnchor="middle" className="chart-axis-label">{point.label}</text>}</g>)}
+      {points.map((point) => point.y === null ? null : <g
+        key={point.key}
+        className={`compliance-point-group ${point.key === selectedMonth ? 'is-selected' : ''} ${point.key === activeKey ? 'is-active' : ''}`}
+        role="button"
+        tabIndex="0"
+        aria-label={`${point.label}: التزام ${fmt.format(point.compliance)} بالمئة، ${fmt.format(point.total)} بلاغ. اضغط لعرض الشهر.`}
+        aria-pressed={point.key === selectedMonth}
+        onMouseEnter={() => setActiveKey(point.key)}
+        onMouseLeave={() => setActiveKey(null)}
+        onFocus={() => setActiveKey(point.key)}
+        onBlur={() => setActiveKey(null)}
+        onClick={() => { onSelectMonth(point.key); }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            onSelectMonth(point.key);
+          }
+        }}
+      >
+        {(point.key === activeKey || point.key === selectedMonth) && <line x1={point.x} x2={point.x} y1={plot.top} y2={plot.top + plotHeight} className="compliance-guide" />}
+        <circle cx={point.x} cy={point.y} r="13" className="compliance-hit-area" />
+        {(point.key === selectedMonth || point.key === activeKey) && <circle cx={point.x} cy={point.y} r="8" className="compliance-point-ring" />}
+        <circle cx={point.x} cy={point.y} r="5" className="compliance-point" />
+        <title>{point.label}: {fmt.format(point.compliance)}% ({fmt.format(point.total)} بلاغ) — اضغط لعرض الشهر</title>
+      </g>)}
+      {points.map((point) => <text key={`label-${point.key}`} x={point.x} y={height - 29} textAnchor="middle" className="chart-axis-label">{point.label}</text>)}
     </svg> : <EmptyState text="لا توجد بيانات كافية لعرض الالتزام الشهري." />}
+    <div className="chart-interaction-summary" aria-live="polite">
+      {activePoint ? <><strong>{activePoint.label}</strong><span>الالتزام <b>{fmt.format(activePoint.compliance)}%</b></span><span>{fmt.format(activePoint.total)} بلاغ</span><small>{activePoint.key === selectedMonth ? 'الشهر محدد للتحليل' : 'اضغط على النقطة لعرض تحليلات الشهر'}</small></> : <span>مرّر على نقطة أو انتقل إليها بلوحة المفاتيح لعرض التفاصيل.</span>}
+    </div>
     <div className="chart-legend"><span /><strong>نسبة الالتزام</strong><small>الشهر بلا بلاغات لا يدخل في احتساب النسبة.</small></div>
   </div>;
 }
@@ -549,9 +637,39 @@ function BreachBreakdownList({ rows, empty }) {
   return rows.length ? <div className="breach-breakdown-list">{rows.slice(0, 30).map((row) => <div className="breach-breakdown-row" key={row.date || row.name}><span title={row.name}>{row.name}</span><div className="breach-breakdown-track"><i style={{ width: `${Math.max(3, row.total / max * 100)}%` }} /></div><strong>{fmt.format(row.total)}</strong></div>)}</div> : <EmptyState text={empty} />;
 }
 function MiniMetric({ title, value, icon: Icon }) { return <div className="mini-metric"><span className="mini-icon"><Icon size={17} /></span><span>{title}</span><strong>{fmt.format(value || 0)}</strong></div>; }
-function DetailedBarList({ rows }) {
-  const max = Math.max(1, ...rows.map((row) => row.total));
-  return <div className="detailed-list">{rows.slice(0, 10).map((row) => <div key={row.name} className="detailed-row"><div className="detailed-info"><strong>{row.name}</strong><span>{fmt.format(row.total)} بلاغ <i>•</i> {fmt.format(row.breached)} مخترق</span></div><div className="detailed-track"><i style={{ width: `${row.total / max * 100}%` }} /></div><b>{row.total ? Math.round((row.breached / row.total) * 100) : 0}%</b></div>)}</div>;
+function DetailedBarList({ rows, metric = 'total', empty = 'لا توجد بيانات للفترة المحددة.' }) {
+  const max = Math.max(1, ...rows.map((row) => row[metric]));
+  return rows.length ? <div className="detailed-list">{rows.slice(0, 10).map((row) => <div key={row.name} className="detailed-row"><div className="detailed-info"><strong>{row.name}</strong><span>{fmt.format(row.total)} بلاغ <i>•</i> {fmt.format(row.breached)} مخترق</span></div><div className="detailed-track"><i style={{ width: `${row[metric] / max * 100}%` }} /></div><b>{row.total ? Math.round((row.breached / row.total) * 100) : 0}%</b></div>)}</div> : <EmptyState text={empty} />;
+}
+function TicketTimeHeatmap({ rows }) {
+  const max = Math.max(1, ...rows.flatMap((row) => row.cells.map((cell) => cell.total)));
+  return <div className="ticket-time-heatmap-scroll"><div className="ticket-time-heatmap">
+    <span className="heatmap-corner">اليوم</span>
+    {Array.from({ length: 24 }, (_, hour) => <span className="heatmap-hour" key={hour}>{String(hour).padStart(2, '0')}</span>)}
+    {rows.map((row) => <React.Fragment key={row.day}>
+      <strong className="heatmap-day">{row.day}</strong>
+      {row.cells.map((cell) => {
+        const intensity = cell.total / max;
+        return <span
+          className={`heatmap-cell ${intensity >= 0.55 ? 'heatmap-cell-strong' : ''}`}
+          key={cell.hour}
+          style={{ backgroundColor: `rgba(218, 91, 83, ${cell.total ? 0.1 + intensity * 0.8 : 0.035})` }}
+          title={`${row.day}، الساعة ${String(cell.hour).padStart(2, '0')}:00 — ${fmt.format(cell.total)} بلاغ، ${fmt.format(cell.breached)} مخترق`}
+          aria-label={`${row.day} الساعة ${cell.hour}: ${cell.total} بلاغ، ${cell.breached} مخترق`}
+        >{cell.total ? fmt.format(cell.total) : ''}</span>;
+      })}
+    </React.Fragment>)}
+  </div></div>;
+}
+function SupervisorWorkloadList({ rows }) {
+  const max = Math.max(0.01, ...rows.map((row) => row.ticketsPerSchool));
+  return rows.length ? <div className="supervisor-workload-list">{rows.slice(0, 10).map((row) => (
+    <article className="supervisor-workload-row" key={row.name}>
+      <div className="supervisor-workload-heading"><strong>{row.name}</strong><b>{fmt.format(row.ticketsPerSchool)} <small>بلاغ / مدرسة</small></b></div>
+      <div className="supervisor-workload-track"><i style={{ width: `${row.ticketsPerSchool / max * 100}%` }} /></div>
+      <div className="supervisor-workload-stats"><span>{fmt.format(row.schoolCount)} مدرسة</span><span>{fmt.format(row.tickets)} بلاغ</span><span>{fmt.format(row.breached)} مخترق</span></div>
+    </article>
+  ))}</div> : <EmptyState text="لا توجد بيانات كافية لمقارنة حمل المشرفين." />;
 }
 function SupervisorAnalysis({ rows }) {
   return rows.length ? <div className="supervisor-analysis-list">{rows.map((row, index) => {
@@ -739,10 +857,51 @@ function TicketDetailsModal({ ticketId, onClose, onOpenRelated, notify }) {
           <TicketFact label="الحالة" value={`${ticket.status || 'غير محددة'} · ${ticket.slm_status || 'SLA غير محددة'}`} />
         </div>
         <section className="ticket-detail-description"><h3>وصف البلاغ بالتفصيل</h3><p>{plainDescription(ticket.description) || 'لا يوجد وصف مسجل.'}</p></section>
+        <section className="ticket-history-section">
+          <div className="school-chart-heading"><div><h3>التاريخ الزمني للحالة وSLA والربط</h3><span>تُسجل التغييرات عند الاستيراد أو تعديل البلاغ والمدرسة وإعدادات SLA.</span></div></div>
+          {ticket.history?.length
+            ? <ol className="ticket-history-list">{ticket.history.map((entry) => <li key={entry.id}>
+              <div className="ticket-history-marker" />
+              <article>
+                <header><strong>{ticketHistorySourceLabel(entry.source)}</strong><time>{formatDate(`${entry.created_at.replace(' ', 'T')}Z`, { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' })}</time></header>
+                <small>{entry.actor_name || (entry.source === 'baseline' ? 'النظام · بداية التتبع' : 'مزامنة النظام')}{entry.reference ? ` · ${entry.reference}` : ''}</small>
+                <div className="ticket-history-changes">{Object.entries(entry.changes).map(([field, change]) => <div key={field}>
+                  <strong>{change.label || field}</strong><span>قبل: {ticketHistoryValue(field, change.before)} · بعد: {ticketHistoryValue(field, change.after)}</span>
+                </div>)}</div>
+              </article>
+            </li>)}</ol>
+            : <EmptyState text="لا توجد تغييرات مسجلة لهذا البلاغ." />}
+        </section>
         {ticket.relatedTickets.length > 0 && <section className="related-tickets"><div className="school-chart-heading"><h3>بلاغات ذات صلة</h3><span>من المدرسة نفسها والطبقة نفسها: {ticket.layer3}</span></div><div className="related-ticket-list">{ticket.relatedTickets.map((related) => <button key={related.id} onClick={() => onOpenRelated(related.id)}><strong>{related.case_id}</strong><span>{related.created_at ? formatDate(related.created_at, { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</span><span>{related.status}</span><span>{related.slm_status}</span></button>)}</div></section>}
       </>}
     </section>
   </div>;
+}
+function ticketHistorySourceLabel(source) {
+  return ({
+    baseline: 'الحالة المسجلة عند بدء التتبع',
+    ticket_created: 'استيراد بلاغ جديد',
+    ticket_import: 'تحديث من استيراد البلاغات',
+    ticket_edit: 'تعديل البلاغ',
+    school_sync: 'تحديث ربط المدارس',
+    school_edit: 'تعديل بيانات المدرسة أو ربطها',
+    school_delete: 'حذف مدرسة من الدليل',
+    attached_school_link: 'تعديل ربط المدرسة الملحقة',
+    sla_settings: 'تعديل إعدادات SLA'
+  })[source] || 'تغيير مسجل';
+}
+function ticketHistoryValue(field, value) {
+  if (value === null || value === undefined || value === '') return 'غير مسجل';
+  if (['needs_attention', 'school_match_override', 'excluded_from_kpi'].includes(field)) return value ? 'نعم' : 'لا';
+  if (field === 'deleted_at') return value || 'ظاهر في القوائم';
+  if (['created_at', 'resolved_at', 'sla_due_at', 'effective_sla_due_at'].includes(field)) {
+    return formatDate(value, { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
+  if (field === 'sla_remaining_minutes' && Number.isFinite(Number(value))) {
+    const minutes = Number(value);
+    return minutes < 0 ? `متجاوز ${durationText(Math.abs(minutes))}` : durationText(minutes);
+  }
+  return String(value);
 }
 function TicketFact({ label, value }) {
   return <div className="ticket-detail-fact"><span>{label}</span><strong>{value}</strong></div>;

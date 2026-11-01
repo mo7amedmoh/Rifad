@@ -234,6 +234,8 @@ export default function ContractKpis({ request, csrf, isAdmin, canEditResults, n
   ];
 
   return <>
+    <details className="contract-kpi-disclosure" dir="rtl">
+      <summary><Calculator size={17} /><span><strong>مؤشرات العقد</strong><small>توقع مؤشرات الأداء والخصم</small></span><i>اضغط لعرض التفاصيل</i></summary>
     <section className="panel contract-kpi-panel" dir="rtl">
       <div className="contract-kpi-heading">
         <div><span className="eyebrow"><Calculator size={15} />مؤشرات العقد</span><h2>توقع مؤشرات الأداء والخصم</h2><p>نتائج الشهر وتوقعات الإقفال وفق البلاغات ومؤشرات العقد.</p></div>
@@ -334,6 +336,7 @@ export default function ContractKpis({ request, csrf, isAdmin, canEditResults, n
       save={saveContractConfig}
       saving={savingConfig}
     />}
+    </details>
   </>;
 }
 
