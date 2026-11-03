@@ -1182,14 +1182,6 @@ app.post('/api/monthly-performance-report/snapshots', requireRole('admin', 'rece
     FROM report_snapshots s LEFT JOIN users u ON u.id = s.created_by WHERE s.id = ?`).get(result.lastInsertRowid);
   res.status(201).json({ snapshot: item });
 });
-app.get('/api/contract-kpis/project', requireRole(...roles), (req, res) => {
-  try {
-    res.json(contractKpiService.projectMonth(req.query.today || new Date()));
-  } catch (error) {
-    if (/تاريخ اليوم/.test(error.message)) return res.status(400).json({ error: error.message });
-    throw error;
-  }
-});
 app.get('/api/contract-kpis/attached-unlinked', requireRole('admin'), (req, res) => {
   const items = db.prepare(`SELECT school_number, name, building_type
     FROM schools WHERE parent_school_id IS NULL ORDER BY name`).all()

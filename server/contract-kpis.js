@@ -1,4 +1,4 @@
-const { isClosed, isCancelled, isOpen } = require('./ticket-status');
+const { isClosed, isCancelled } = require('./ticket-status');
 const NON_KPI_SLA_LAYER = 'استفسارات اعمال النظافة العامة';
 
 const KPI_DEFAULTS = [
@@ -282,85 +282,6 @@ function computeMonth(input) {
   return { month: input.month, ...computed, ...financials };
 }
 
-function projectMonth({ today, monthInput, daysElapsed, daysInMonth }) {
-  const base = computeMonth(monthInput);
-  const currentOpen = monthInput.tickets.filter((ticket) => !ticket.excluded_from_kpi &&
-    !ticket.deleted_at && isEligibleContractTicket(ticket) && isOpen(ticket));
-  const unresolvedCount = currentOpen.length;
-  const hs3 = monthInput.kpis.find((item) => item.code === 'HS.3');
-  const resolved = hs3 ? base.indicators[hs3.code]?.reports || 0 : 0;
-  const closedTotal = monthInput.tickets.filter((ticket) => isEligibleContractTicket(ticket) &&
-    isClosed(ticket) && !isCancelled(ticket)).length;
-  const makeScenario = (mode) => {
-    const scenarioInput = {
-      ...monthInput,
-      tickets: monthInput.tickets.map((ticket) => {
-        if (mode === 'pace' || !currentOpen.some((item) => item.id === ticket.id)) return ticket;
-        if (mode === 'best') return { ...ticket, status: 'مغلق', slm_status: 'ضمن المهلة' };
-        return { ...ticket, status: 'مغلق', slm_status: 'تم اختراقه' };
-      })
-    };
-    const result = computeMonth(scenarioInput);
-    if (mode === 'pace' && daysElapsed > 0) {
-      const factor = daysInMonth / daysElapsed;
-      for (const system of scenarioInput.hsSystems) {
-        const indicator = result.indicators[system.kpiCode];
-        const projectedReports = Math.round(indicator.reports * factor);
-        const achieved = calculateSystemAchievement(projectedReports, indicator.denominator);
-        result.indicators[system.kpiCode] = {
-          ...indicator, ...achieved, source: 'auto', missing: false,
-          points: round(getKpiScore(achieved.achieved_pct, scenarioInput.kpis.find((kpi) => kpi.code === system.kpiCode).target), 4)
-        };
-      }
-      result.performance = aggregatePerformance(result.indicators, scenarioInput.kpis, scenarioInput.categoryWeights).achievedPct;
-      Object.assign(result, calculateFinancials({
-        month: scenarioInput.month,
-        performance: result.performance,
-        contractStartDate: scenarioInput.contractStartDate,
-        monthlyInvoiceValue: scenarioInput.monthlyInvoiceValue,
-        payoutTable: scenarioInput.payoutTable,
-        fines: scenarioInput.fines,
-        indicators: result.indicators
-      }));
-    }
-    return result;
-  };
-  const scenarios = {
-    best: makeScenario('best'),
-    pace: makeScenario('pace'),
-    worst: makeScenario('worst')
-  };
-  const knownDeductions = Object.values(scenarios).map((scenario) => scenario.deduction).filter(Number.isFinite);
-  return {
-    today,
-    month: base.month,
-    daysElapsed,
-    daysInMonth,
-    openReports: unresolvedCount,
-    hs3Current: hs3 ? base.indicators[hs3.code] : null,
-    resolvedClosedOnTime: resolved,
-    closedReports: closedTotal,
-    scenarios,
-    range: {
-      performance: {
-        min: Math.min(scenarios.best.performance, scenarios.pace.performance, scenarios.worst.performance),
-        expected: scenarios.pace.performance,
-        max: Math.max(scenarios.best.performance, scenarios.pace.performance, scenarios.worst.performance)
-      },
-      payoutBand: {
-        min: scenarios.worst.payout.band,
-        expected: scenarios.pace.payout.band,
-        max: scenarios.best.payout.band
-      },
-      deduction: {
-        min: knownDeductions.length ? Math.min(...knownDeductions) : null,
-        expected: scenarios.pace.deduction,
-        max: knownDeductions.length ? Math.max(...knownDeductions) : null
-      }
-    }
-  };
-}
-
 function haversineDistanceMeters(first, second) {
   const toRadians = (degrees) => degrees * Math.PI / 180;
   const lat1 = toRadians(first.latitude);
@@ -390,5 +311,5 @@ module.exports = {
   PAYOUT_PERIODS, PAYOUT_BANDS, PAYOUT_7_PLUS, HEALTH_PLUMBING_LAYER, isExcludedLayer,
   calculateSystemAchievement, categoryContribution, payoutPeriod, payoutBand, selectPayout,
   contractMonthNumber, normalizeText, classifyTicket, isEligibleContractTicket, getKpiScore, aggregatePerformance,
-  computeIndicators, calculateFinancials, computeMonth, projectMonth, haversineDistanceMeters, findNearestParent
+  computeIndicators, calculateFinancials, computeMonth, haversineDistanceMeters, findNearestParent
 };

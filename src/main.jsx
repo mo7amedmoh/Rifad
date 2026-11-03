@@ -1,7 +1,6 @@
 import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { toBlob, toPng } from 'html-to-image';
-import ContractKpis from './ContractKpis';
 import {
   Activity, AlertCircle, AlertTriangle, ArrowDownToLine, ArrowLeft,
   Building2, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight,
@@ -529,7 +528,6 @@ function Analysis({ period, setPeriod, selectedMonth, setSelectedMonth, session,
           <section className="panel chart-panel supervisor-workload-panel"><div className="panel-heading"><div><h3>حمل المشرف مقابل عدد مدارسه</h3><p>معدل البلاغات لكل مدرسة مؤهلة (مستقل أو مشترك أساسي)</p></div></div><SupervisorWorkloadList rows={summary?.supervisorWorkload || []} /></section>
         </div>
       </section>
-      <ContractKpis request={request} csrf={csrf} isAdmin={session.role === 'admin'} canEditResults={session.role !== 'viewer'} notify={notify} />
       <div className="data-footnote"><AlertCircle size={15} />تُحتسب التحليلات للمدارس المطابقة بالرقم الوزاري أو باسم مدرسة فريد. يعبّر الالتزام الشهري عن الحالة الحالية لبلاغات كل شهر.</div>
       <div className="analysis-report-footer">رِفاد · Shalfa · © Mohamed Elshenawy · Internal Private</div>
     </div>

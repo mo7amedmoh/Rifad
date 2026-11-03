@@ -785,9 +785,8 @@ test('secure setup, repeated ticket import, reason capture, and school mapping',
     });
     assert.equal(attachedOverrideResponse.status, 200);
     assert.equal(db.prepare('SELECT parent_school_id FROM schools WHERE school_number = ?').get('300003').parent_school_id, '300002');
-    const contractProjectionResponse = await nativeFetch(`${base}/api/contract-kpis/project?today=2026-10-15`, { headers: { Cookie: cookie } });
-    assert.equal(contractProjectionResponse.status, 200);
-    assert.deepEqual(Object.keys((await contractProjectionResponse.json()).scenarios).sort(), ['best', 'pace', 'worst']);
+    const retiredProjectionResponse = await nativeFetch(`${base}/api/contract-kpis/project?today=2026-10-15`, { headers: { Cookie: cookie } });
+    assert.equal(retiredProjectionResponse.status, 404);
   } finally {
     global.fetch = nativeFetch;
   }

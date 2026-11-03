@@ -1,6 +1,5 @@
 const {
   computeMonth: calculateMonth,
-  projectMonth: calculateProjection,
   normalizeText
 } = require('./contract-kpis');
 const { calculateCompliance } = require('./ticket-status');
@@ -67,28 +66,7 @@ function createContractKpiService(db) {
     };
   }
 
-  function projectMonth(todayValue = new Date()) {
-    const todayString = todayValue instanceof Date
-      ? Number.isFinite(todayValue.getTime()) ? todayValue.toISOString().slice(0, 10) : ''
-      : String(todayValue);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(todayString)) throw new Error('تاريخ اليوم غير صالح.');
-    const today = new Date(`${todayString}T00:00:00.000Z`);
-    if (!Number.isFinite(today.getTime()) || today.toISOString().slice(0, 10) !== todayString) {
-      throw new Error('تاريخ اليوم غير صالح.');
-    }
-    const month = today.toISOString().slice(0, 7);
-    const daysInMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0)).getUTCDate();
-    const daysElapsed = today.getUTCDate();
-    const input = loadMonthInput(month);
-    return calculateProjection({
-      today: today.toISOString().slice(0, 10),
-      monthInput: input,
-      daysElapsed,
-      daysInMonth
-    });
-  }
-
-  return { computeMonth, projectMonth, loadMonthInput };
+  return { computeMonth, loadMonthInput };
 }
 
 module.exports = { createContractKpiService, attributeTicketToSchool };

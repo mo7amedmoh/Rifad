@@ -59,67 +59,16 @@
 .priority-matrix-heading{margin-top:24px;padding-top:21px;border-top:1px solid #e8eeee}.priority-tiers{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:16px}.priority-tier{display:grid;align-content:start;gap:5px;min-height:76px;padding:12px;border:1px solid #e5ecec;border-radius:10px;background:#fbfcfc}.priority-tier strong{color:#315b5e;font-size:12px}.priority-tier span{color:#7b898e;font-size:11px;line-height:1.6}.priority-matrix-toggle input:disabled{opacity:.5;cursor:not-allowed}.priority-alert-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.priority-alert-options .priority-matrix-toggle{margin:0}.priority-alert-options-disabled{opacity:.55}.priority-alert-options-disabled .priority-matrix-toggle{cursor:not-allowed}
 @media(max-width:780px){.priority-tiers{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:500px){.priority-alert-options{grid-template-columns:1fr}}
-.contract-kpi-panel,.contract-settings-panel{margin-top:16px;padding:20px;direction:rtl;font-family:'Cairo',Tahoma,sans-serif}
-.contract-kpi-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:18px}
-.contract-kpi-heading h2{margin:5px 0;color:#253f4e;font-size:19px;font-weight:800}
-.contract-kpi-heading p,.contract-settings-panel .panel-heading p{margin:0;color:#97a4aa;font-size:12px}
-.contract-month-picker,.contract-config-grid label,.contract-weight-grid label,.contract-simulator-controls label{display:grid;gap:6px;color:#60737d;font-size:12px;font-weight:700}
-.contract-month-picker input,.contract-config-grid input,.contract-weight-grid input,.contract-simulator-controls input,.contract-simulator-controls select,.contract-number-input,.contract-config-payout input,.contract-config-textareas textarea{min-width:0;border:1px solid #e1e9eb;border-radius:8px;background:#fff;padding:8px 10px;color:#314957;font-size:12px;font-family:'Cairo',Tahoma,sans-serif}
-.contract-completeness{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;margin-top:18px;color:#6b7e87;font-size:12px}
-.contract-completeness strong{color:#2b7c77}
-.contract-progress{height:7px;grid-column:1/-1;overflow:hidden;border-radius:8px;background:#edf2f2}
-.contract-progress i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#168982,#43b69e)}
-.contract-upper-bound,.contract-settings-hint{display:flex;align-items:center;gap:8px;margin-top:12px;padding:10px 12px;border:1px solid #f1e2c6;border-radius:8px;background:#fff9ed;color:#9b6b22;font-size:12px;font-weight:700}
-.contract-settings-hint{background:#eef8f7;border-color:#dbeeea;color:#287e77}
-.contract-forecast-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:14px}
-.contract-forecast-card{display:grid;gap:6px;min-height:105px;padding:13px;border:1px solid #e8eff0;border-radius:10px;background:linear-gradient(155deg,#fff,#fbfdfd)}
-.contract-forecast-card>span,.contract-forecast-card small{color:#88979e;font-size:11px}
-.contract-forecast-card>strong{color:#244654;font-size:20px;font-weight:800}
-.contract-forecast-card small{line-height:1.6}
-.contract-forecast-main{background:#eff9f7;border-color:#d9efea}
-.contract-forecast-main>strong{color:#13837b}
-.contract-forecast-main i{font-style:normal;color:#a6b8b8}
-.contract-projection-table-wrap,.contract-table-wrap{width:100%;overflow:auto}
-.contract-projection-table-wrap{margin-top:14px}
+.contract-settings-panel{margin-top:12px;padding:18px;direction:rtl;font-family:'Cairo',Tahoma,sans-serif}
+.contract-config-grid label,.contract-weight-grid label{display:grid;gap:6px;color:#60737d;font-size:12px;font-weight:700}
+.contract-config-grid input,.contract-weight-grid input,.contract-config-payout input,.contract-config-textareas textarea{min-width:0;border:1px solid #e1e9eb;border-radius:8px;background:#fff;padding:8px 10px;color:#314957;font-size:12px;font-family:'Cairo',Tahoma,sans-serif}
+.contract-table-wrap{width:100%;overflow:auto}
 .contract-table{width:100%;border-collapse:collapse;font-size:12px;text-align:right}
 .contract-table th,.contract-table td{padding:10px 9px;border-bottom:1px solid #edf1f2;vertical-align:middle;white-space:nowrap}
 .contract-table thead th{background:#f7f9fa;color:#73858d;font-size:11px;font-weight:700}
 .contract-table tbody th{color:#344f5d;font-weight:700}
 .contract-table tbody td{color:#5d737d}
-.contract-forecast-table tbody th{font-weight:700}
-.contract-category-list{display:grid;gap:10px;margin-top:18px}
-.contract-category{overflow:hidden;border:1px solid #e8eff0;border-radius:10px;background:#fff}
-.contract-category summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 15px;cursor:pointer;list-style:none;background:#f8fbfb;color:#304d5b;font-size:12px}
-.contract-category summary::-webkit-details-marker{display:none}
-.contract-category summary span{color:#829198;font-size:11px}
-.contract-category .contract-table{min-width:900px}
-.contract-category .contract-table th small{display:block;max-width:220px;margin-top:3px;color:#84949b;font-size:10px;font-weight:500;white-space:normal}
-.contract-number-input{width:90px;padding:6px}
-.contract-source{display:inline-flex;padding:3px 7px;border-radius:6px;font-size:10px;font-weight:800}
-.contract-source-auto{background:#edf6f9;color:#357f9a}
-.contract-source-manual{background:#f2effa;color:#7463a3}
-.contract-treatment-flag,.contract-missing-flag{display:inline-block;margin:2px;padding:4px 6px;border-radius:6px;background:#fff1e9;color:#bd6441;font-size:10px;font-weight:700}
-.contract-missing-flag{background:#fff7e8;color:#a87523}
-.contract-save-row{display:flex;justify-content:flex-end;margin-top:12px}
-.contract-simulator{margin-top:18px;padding:16px;border:1px solid #e3eeed;border-radius:11px;background:#f9fcfb}
-.contract-simulator .panel-heading{margin-bottom:13px}
-.contract-simulator .panel-heading h3{display:flex;align-items:center;gap:7px;margin:0;color:#2e4a57;font-size:14px}
-.contract-simulator .panel-heading h3 svg{color:#268f87}
-.contract-simulator .panel-heading p{margin:4px 0 0;color:#8a999f;font-size:11px}
-.contract-simulator-controls{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap}
-.contract-simulator-controls label{min-width:165px}
-.contract-simulator-controls label:first-child{flex:1}
-.contract-simulation-comparison{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}
-.contract-simulation-comparison>div{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:12px;border:1px solid #e8eff0;border-radius:9px;background:#fff;color:#6e8189;font-size:11px}
-.contract-simulation-comparison strong{grid-column:1/-1;color:#2e4b59;font-size:12px}
-.contract-next-band{margin:12px 0;color:#15847c;font-size:12px;font-weight:800}
-.contract-impact-list{display:grid;gap:7px}
-.contract-impact-list>strong{margin-bottom:2px;color:#445e69;font-size:12px}
-.contract-impact-list>span{display:flex;justify-content:space-between;gap:10px;padding:7px 9px;border-radius:7px;background:#fff;color:#71838b;font-size:11px}
-.contract-impact-list b{color:#32847f;white-space:nowrap}
-.contract-unmapped{display:grid;gap:5px;margin-top:12px;padding:10px 12px;border-radius:8px;background:#fff8e9;color:#88652d;font-size:11px}
-.contract-report-footer{margin-top:16px;padding-top:10px;border-top:1px solid #e9eff0;color:#9aa7ad;font-size:10px}
-.contract-settings-panel{padding:18px}
+.contract-settings-panel .panel-heading p{margin:0;color:#97a4aa;font-size:12px}
 .contract-settings-panel .panel-heading{margin-bottom:15px}
 .contract-settings-panel .panel-heading h2{display:flex;align-items:center;gap:7px;color:#2c4653;font-size:15px}
 .contract-settings-panel .panel-heading h2 svg{color:#358c87}
@@ -132,14 +81,19 @@
 .contract-config-textareas label small{color:#89989e;font-size:10px;font-weight:500}
 .contract-config-textareas textarea{resize:vertical;line-height:1.8}
 .contract-settings-panel form>.btn{margin-top:4px}
-.analysis-export-capture .contract-settings-panel{display:none!important}
-@media(max-width:900px){.contract-forecast-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.contract-weight-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.contract-config-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:600px){.contract-kpi-panel,.contract-settings-panel{padding:14px}.contract-kpi-heading{flex-direction:column}.contract-month-picker{width:100%}.contract-month-picker input{width:100%}.contract-forecast-grid{grid-template-columns:1fr 1fr}.contract-forecast-card{padding:10px}.contract-forecast-card>strong{font-size:17px}.contract-category summary{align-items:flex-start;flex-direction:column}.contract-simulation-comparison{grid-template-columns:1fr}.contract-config-grid,.contract-weight-grid{grid-template-columns:1fr}.contract-simulator-controls{align-items:stretch;flex-direction:column}.contract-simulator-controls label{width:100%}.contract-simulator-controls .btn{width:100%}}
+@media(max-width:900px){.contract-weight-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.contract-config-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.contract-settings-panel{padding:14px}.contract-config-grid,.contract-weight-grid{grid-template-columns:1fr}}
 .compliance-line{stroke-dasharray:1400;stroke-dashoffset:1400;animation:compliance-line-reveal 850ms ease-out forwards}.compliance-point{opacity:0;animation:compliance-point-appear 350ms ease-out forwards;animation-delay:450ms}@keyframes compliance-line-reveal{to{stroke-dashoffset:0}}@keyframes compliance-point-appear{to{opacity:1}}@media(prefers-reduced-motion:reduce){.compliance-line,.compliance-point{animation:none;stroke-dashoffset:0;opacity:1}}
 .compliance-point-group{cursor:pointer;outline:none}.compliance-hit-area{fill:transparent;stroke:none}.compliance-point-ring{fill:#fff;stroke:#168b83;stroke-width:2}.compliance-guide{stroke:#168b83;stroke-width:1;stroke-dasharray:4 5;opacity:.35;pointer-events:none}.compliance-point-group:hover .compliance-point,.compliance-point-group:focus .compliance-point,.compliance-point-group.is-selected .compliance-point{opacity:1;stroke-width:3}.compliance-point-group:focus .compliance-point-ring{stroke-width:3}.chart-interaction-summary{display:flex;align-items:center;gap:12px;min-height:38px;margin:2px 0 10px;padding:8px 11px;border:1px solid #e8f0ef;border-radius:8px;background:#f8fbfa;color:#617780;font-size:11px}.chart-interaction-summary>strong{color:#284b57;font-size:12px}.chart-interaction-summary b{color:#168b83}.chart-interaction-summary small{margin-right:auto;color:#87969b}.chart-legend{margin-top:5px}
 .analysis-comparison-grid{grid-template-columns:minmax(0,1fr)}.analysis-comparison-grid>.chart-panel{min-width:0}.analysis-comparison-grid .detailed-list,.analysis-comparison-grid .supervisor-analysis-list{grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));align-content:start;gap:8px 12px}.analysis-comparison-grid .detailed-list{margin-top:12px}.analysis-comparison-grid .detailed-row{min-width:0;grid-template-columns:minmax(100px,1fr) minmax(65px,.8fr) 34px;gap:10px;padding:8px 0}.analysis-comparison-grid .supervisor-analysis-list{margin-top:12px}.analysis-comparison-grid .supervisor-analysis-row{padding:9px 10px}.analysis-comparison-grid .supervisor-analysis-bar{margin:7px 0 6px}.analysis-comparison-grid .supervisor-analysis-stats{gap:5px 10px;font-size:10px}
-.supervisor-workload-panel{grid-column:1/-1}.supervisor-workload-list{grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));align-content:start}.supervisor-workload-row{min-width:0}.contract-kpi-disclosure{margin-top:16px;border:0;background:transparent}.contract-kpi-disclosure>summary{display:flex;align-items:center;gap:10px;min-height:60px;padding:13px 16px;border:1px solid #e5ecee;border-radius:12px;background:#fff;color:#24877f;cursor:pointer;list-style:none;box-shadow:0 3px 12px #20394408}.contract-kpi-disclosure>summary::-webkit-details-marker{display:none}.contract-kpi-disclosure>summary:before{content:'＋';display:grid;place-items:center;width:25px;height:25px;border-radius:7px;background:#eef8f6;color:#278b82;font-size:17px}.contract-kpi-disclosure[open]>summary:before{content:'−'}.contract-kpi-disclosure>summary>span{display:grid;gap:2px}.contract-kpi-disclosure>summary>span strong{color:#2a4854;font-size:14px}.contract-kpi-disclosure>summary>span small{color:#87969b;font-size:11px}.contract-kpi-disclosure>summary>i{margin-right:auto;color:#87969b;font-size:11px;font-style:normal}.contract-kpi-disclosure .contract-kpi-panel{margin-top:10px}.contract-kpi-disclosure[open]>summary{border-color:#d6e9e6;border-radius:12px 12px 0 0}.analysis-export-capture .contract-kpi-disclosure{display:block!important}.analysis-export-capture .contract-kpi-disclosure>summary{display:none!important}.analysis-export-capture .contract-kpi-disclosure .contract-kpi-panel{margin-top:0}
-@media(max-width:540px){.supervisor-workload-list{grid-template-columns:1fr}.contract-kpi-disclosure>summary{padding:11px}.contract-kpi-disclosure>summary>i{font-size:10px}}
+.supervisor-workload-panel{grid-column:1/-1}.supervisor-workload-list{grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));align-content:start}.supervisor-workload-row{min-width:0}
+@media(max-width:540px){.supervisor-workload-list{grid-template-columns:1fr}}
+.report-contract-config{margin-bottom:16px;border:1px solid #e5ecee;border-radius:10px;background:#fff}
+.report-contract-config>summary{display:flex;align-items:center;gap:8px;padding:12px 15px;color:#2c756f;font-size:13px;font-weight:700;cursor:pointer;list-style:none}
+.report-contract-config>summary::-webkit-details-marker{display:none}
+.report-contract-config[open]>summary{border-bottom:1px solid #e5ecee}
+.report-kpi-input{width:95px;min-width:80px;padding:6px 8px;border:1px solid #dfe8e9;border-radius:7px;background:#fff;color:#304c58;font:inherit}
+.report-save-kpis{margin-top:12px}
 .manual-report-empty-print{display:none}
 @media print{.manual-report-empty-print{display:block;color:#8a5a10;background:#fff8e9;padding:5px}.manual-report-empty textarea{display:none!important}}
 .school-overview{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(280px,1fr);gap:14px;margin-bottom:15px}.school-overview-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.school-overview-card{display:grid;align-content:center;gap:4px;min-height:112px;padding:14px 16px;border:1px solid #e8edef;border-radius:12px;background:#fff;box-shadow:0 3px 12px #20394408}.school-overview-card>span{display:flex;align-items:center;gap:7px;color:#71838a;font-size:12px;font-weight:700}.school-overview-card>span svg{color:#258a82}.school-overview-card>strong{color:#284654;font-size:25px;line-height:1.2}.school-overview-card>small{color:#98a4a8;font-size:11px}.school-neighborhood-summary{min-width:0;padding:14px}.school-neighborhood-summary .panel-heading{margin-bottom:10px}.school-neighborhood-summary .panel-heading h2{display:flex;align-items:center;gap:6px;color:#314d59;font-size:14px}.school-neighborhood-summary .panel-heading h2 svg{color:#258a82}.school-neighborhood-summary .panel-heading p{margin:3px 0 0;color:#8b989d;font-size:11px}.school-directory-total{flex:none;padding:5px 8px;border-radius:7px;background:#f2f7f6;color:#648078;font-size:11px}.school-neighborhood-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;max-height:172px;overflow:auto}.school-neighborhood-row{display:flex;justify-content:space-between;align-items:center;gap:8px;min-width:0;padding:7px 9px;border:1px solid #edf1f2;border-radius:7px;color:#5d727a;font-size:11px}.school-neighborhood-row>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.school-neighborhood-row>strong{color:#2c555d}.school-neighborhood-empty{padding:10px;color:#89979c;font-size:12px}.ticket-history-section{margin-top:16px;padding:14px;border:1px solid #e8edef;border-radius:11px;background:#fbfcfc}.ticket-history-section>.school-chart-heading{margin-bottom:12px}.ticket-history-section>.school-chart-heading h3{margin:0;color:#36545f;font-size:14px}.ticket-history-section>.school-chart-heading span{display:block;margin-top:4px;color:#85949a;font-size:11px}.ticket-history-list{position:relative;display:grid;gap:12px;margin:0;padding:0 18px 0 0;list-style:none}.ticket-history-list:before{position:absolute;top:7px;right:5px;bottom:7px;width:1px;background:#dce9e7;content:""}.ticket-history-list>li{position:relative;min-width:0}.ticket-history-marker{position:absolute;top:16px;right:-17px;width:11px;height:11px;border:2px solid #fff;border-radius:50%;background:#268b83;box-shadow:0 0 0 1px #b6d8d3}.ticket-history-list article{min-width:0;padding:11px;border:1px solid #e9eeee;border-radius:9px;background:#fff}.ticket-history-list article>header{display:flex;justify-content:space-between;align-items:center;gap:8px}.ticket-history-list article>header strong{color:#36545f;font-size:12px}.ticket-history-list article>header time,.ticket-history-list article>small{color:#829198;font-size:10px}.ticket-history-list article>small{display:block;margin-top:4px;overflow-wrap:anywhere}.ticket-history-changes{display:grid;gap:5px;margin-top:9px}.ticket-history-changes>div{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding-top:6px;border-top:1px solid #f0f3f3;font-size:11px}.ticket-history-changes>div>strong{flex:none;color:#678087}.ticket-history-changes>div>span{min-width:0;color:#36545f;text-align:left;overflow-wrap:anywhere}@media(max-width:600px){.ticket-history-section{padding:10px}.ticket-history-list article{padding:9px}.ticket-history-changes>div{display:grid;gap:3px}.ticket-history-changes>div>span{text-align:right}}

@@ -4,6 +4,7 @@ import {
   Paragraph, ShadingType, Table, TableCell, TableRow, TextRun, WidthType
 } from 'docx';
 import { AlertCircle, CheckCircle2, Download, FileText, Printer, Save } from 'lucide-react';
+import ContractReportSettings from './ContractReportSettings';
 
 const MONTHLY_SECTIONS = [
   ['subcontractor', 'المقاول من الباطن'],
@@ -206,6 +207,8 @@ export default function MonthlyPerformanceReport({ csrf, session, request, notif
   const [loading, setLoading] = useState(true);
   const [savingSections, setSavingSections] = useState(false);
   const [approving, setApproving] = useState(false);
+  const [manualDrafts, setManualDrafts] = useState({});
+  const [savingKpis, setSavingKpis] = useState(false);
   const report = snapshot?.data?.report || loaded?.report;
   const currentSections = snapshot?.data?.manualSections || manualSections;
   const narrativeText = snapshot?.data?.narrative ?? narrative;
@@ -227,12 +230,47 @@ export default function MonthlyPerformanceReport({ csrf, session, request, notif
       setLoaded(data);
       setManualSections(data.manualSections || {});
       setNarrative(defaultNarrative(data.report));
+      setManualDrafts({});
       setSnapshots(saved.items || []);
     }).catch((error) => {
       if (active) notify(error.message);
     }).finally(() => active && setLoading(false));
     return () => { active = false; };
   }, [month, notify, request]);
+
+  const refreshReport = async () => {
+    const fresh = await request(`/api/monthly-performance-report?month=${encodeURIComponent(month)}`);
+    setLoaded(fresh);
+    setManualSections(fresh.manualSections || {});
+  };
+  const saveManualKpis = async () => {
+    if (Object.values(manualDrafts).some((value) => String(value.achieved_pct).trim() === '')) {
+      return notify('أدخل قيمة كل مؤشر يدوي تغيّر قبل الحفظ.');
+    }
+    const results = Object.entries(manualDrafts).map(([kpiCode, value]) => ({
+      kpiCode,
+      achievedPct: Number(value.achieved_pct),
+      fineCount: Number(value.fine_count || 0)
+    }));
+    if (!results.length) return notify('لا توجد تغييرات يدوية لحفظها.');
+    if (results.some((item) => !Number.isFinite(item.achievedPct) || item.achievedPct < 0 ||
+      item.achievedPct > 100 || !Number.isInteger(item.fineCount) || item.fineCount < 0)) {
+      return notify('تحقق من قيم المؤشر وعدد الغرامات.');
+    }
+    setSavingKpis(true);
+    try {
+      await request('/api/contract-kpis/results', {
+        method: 'PUT', csrf, body: JSON.stringify({ month, results })
+      });
+      setManualDrafts({});
+      await refreshReport();
+      notify('تم حفظ المؤشرات اليدوية وتحديث التقرير.');
+    } catch (error) {
+      notify(error.message);
+    } finally {
+      setSavingKpis(false);
+    }
+  };
 
   const loadSnapshot = async (id) => {
     setSnapshotId(id);
@@ -347,6 +385,12 @@ export default function MonthlyPerformanceReport({ csrf, session, request, notif
       <label className="monthly-snapshot-picker">النسخ المعتمدة<select value={snapshotId} onChange={(event) => loadSnapshot(event.target.value)}><option value="">المعاينة الحالية</option>{snapshots.map((item) => <option value={item.id} key={item.id}>نسخة {dateLabel(item.created_at)} · {item.created_by || 'مستخدم'}</option>)}</select></label>
       {snapshot && <span className="report-approved-badge"><CheckCircle2 size={15} />نسخة معتمدة محفوظة · لا تتغير بتحديث البيانات</span>}
     </div>
+    {session.role === 'admin' && <ContractReportSettings
+      request={request}
+      csrf={csrf}
+      notify={notify}
+      onSaved={refreshReport}
+    />}
 
     <article className="monthly-report-preview">
       <header className="monthly-report-cover">
@@ -376,10 +420,40 @@ export default function MonthlyPerformanceReport({ csrf, session, request, notif
           <div><span>الخصم</span><strong>{report.contractKpis.deduction == null ? 'غير مُدخل' : numberText(report.contractKpis.deduction)}</strong></div>
         </div>
         <DataTable headers={['الفئة', 'النقاط', 'الوزن', 'الدرجة النهائية']} rows={categories.map(([category, value]) => [CATEGORY_LABELS[category] || category, numberText(value.points), percentText(value.weight), numberText(value.points)])} />
-        <DataTable headers={['الرمز', 'المؤشر', 'القيمة', 'النقاط', 'المصدر']} rows={(report.contractKpis.kpis || []).map((item) => {
+        <div className="report-table-wrap"><table className="report-data-table"><thead><tr>
+          {['الرمز', 'المؤشر', 'القيمة', 'النقاط', 'المصدر', 'عدد الغرامات'].map((header) => <th key={header}>{header}</th>)}
+        </tr></thead><tbody>{(report.contractKpis.kpis || []).map((item) => {
           const value = report.contractKpis.indicators[item.code];
-          return [item.code, item.name, value?.missing ? 'لم يُدخل' : percentText(value?.achieved_pct), value?.missing ? '—' : numberText(value?.points), item.source === 'auto' ? 'آلي' : 'يدوي'];
-        })} />
+          const draft = manualDrafts[item.code] || {
+            achieved_pct: value?.missing ? '' : String(value?.achieved_pct ?? ''),
+            fine_count: String(value?.fine_count || 0)
+          };
+          const editable = item.source === 'manual' && canEdit && !snapshot;
+          return <tr key={item.code}>
+            <td>{item.code}</td><td>{item.name}</td>
+            <td>{editable
+              ? <input className="report-kpi-input" type="number" min="0" max="100" step="0.01"
+                aria-label={`${item.code} قيمة المؤشر`}
+                value={draft.achieved_pct}
+                onChange={(event) => setManualDrafts((current) => ({
+                  ...current, [item.code]: { ...draft, achieved_pct: event.target.value }
+                }))} />
+              : value?.missing ? 'لم يُدخل' : percentText(value?.achieved_pct)}</td>
+            <td>{value?.missing ? '—' : numberText(value?.points)}</td>
+            <td>{item.source === 'auto' ? 'آلي' : 'يدوي'}</td>
+            <td>{editable
+              ? <input className="report-kpi-input" type="number" min="0" step="1"
+                aria-label={`${item.code} عدد الغرامات`}
+                value={draft.fine_count}
+                onChange={(event) => setManualDrafts((current) => ({
+                  ...current, [item.code]: { ...draft, fine_count: event.target.value }
+                }))} />
+              : numberText(value?.fine_count || 0)}</td>
+          </tr>;
+        })}</tbody></table></div>
+        {canEdit && !snapshot && <button className="btn btn-primary report-save-kpis" onClick={saveManualKpis} disabled={savingKpis || Object.keys(manualDrafts).length === 0}>
+          <Save size={15} />{savingKpis ? 'جارٍ حفظ المؤشرات…' : 'حفظ المؤشرات اليدوية'}
+        </button>}
       </ReportSection>
 
       <ReportSection title="تفاصيل مؤشرات HS الآلية">
